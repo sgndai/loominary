@@ -1,0 +1,29 @@
+name: Verify PR32
+
+on:
+  push:
+    branches:
+      - verify/pr32-local-service-ci
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run PR32 local service tests
+        run: npm run test:local-service
+
+      - name: Build app
+        run: npm run build
