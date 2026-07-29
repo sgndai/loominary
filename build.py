@@ -1,278 +1,276 @@
 #!/usr/bin/env python3
-"""
-用于将模块化的 JavaScript 源文件合并成 Userscript 和 Chrome 扩展
+"""Deterministic build entrypoint for Loominary.
 
-Usage:
-    python build.py              # 构建完整版（Userscript + Extension）
-    python build.py all          # 构建完整版（Userscript + Extension）
-    python build.py userscript   # 只构建 Userscript
-    python build.py extension    # 只构建 Chrome 扩展（所有平台）
-    python build.py extension claude   # 只构建 Chrome 扩展（仅 Claude 平台）
-    python build.py firefox      # 构建 Firefox 扩展（基于 Chrome 扩展产物）
-    python build.py firefox claude     # 仅 Claude 平台的 Firefox 扩展
-    python build.py claude       # 只构建 Claude 版本（Userscript）
-    python build.py chatgpt      # 只构建 ChatGPT 版本（Userscript）
-    python build.py gemini       # 只构建 Gemini 版本（Userscript）
-
-架构说明：
-    - src/ 目录是唯一的代码来源
-    - dist/ 输出 Userscript 构建结果
-    - extension/ 输出 Chrome 扩展构建结果
-    - 修改代码时只需修改 src/ 目录下的文件，然后运行 build.py
+Examples:
+    python build.py
+    python build.py all
+    python build.py check
+    python build.py userscript
+    python build.py userscript chatgpt
+    python build.py chatgpt
+    python build.py extension
+    python build.py extension claude
+    python build.py firefox
+    python build.py pages
 """
 
-import sys
+from __future__ import annotations
+
+import argparse
+import json
 import os
 import re
 import shutil
-import json
 import subprocess
-from pathlib import Path
+import sys
+import zipfile
+from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
+from typing import Iterable
 
-# 设置 UTF-8 输出编码（Windows 兼容）
-if sys.platform == 'win32':
+ROOT = Path(__file__).resolve().parent
+SRC_DIR = ROOT / "src"
+DIST_DIR = ROOT / "dist"
+CHROME_DIR = ROOT / "chrome"
+FIREFOX_DIR = ROOT / "firefox"
+PACKAGE_JSON = ROOT / "package.json"
+
+if sys.platform == "win32":
     import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-# 版本号（统一管理）
-VERSION = "26.3.1"
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
-# ============================================================
-# Claude 镜像域名配置
-# 在这里添加镜像站，构建时自动注入到 manifest、content.js、React bundle
-# 格式：完整 origin，不加末尾斜杠
-# ============================================================
-CLAUDE_MIRRORS = [
-# 'https://claude.rent',
+CLAUDE_MIRRORS: list[str] = [
+    # "https://claude.example.com",
 ]
 
-# 平台配置
 PLATFORMS = {
-    'claude': {
-        'name': 'Claude',
-        'matches': [
-            'https://claude.ai/*'
-        ]
+    "claude": {
+        "name": "Claude",
+        "matches": ["https://claude.ai/*"],
     },
-    'chatgpt': {
-        'name': 'ChatGPT',
-        'matches': [
-            'https://chatgpt.com/*',
-            'https://chat.openai.com/*'
-        ]
+    "chatgpt": {
+        "name": "ChatGPT",
+        "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
     },
-    'grok': {
-        'name': 'Grok',
-        'matches': [
-            'https://grok.com/*'
+    "grok": {
+        "name": "Grok",
+        "matches": ["https://grok.com/*"],
+        "image_hosts": ["*://*.grok.com/*"],
+    },
+    "copilot": {
+        "name": "Copilot",
+        "matches": ["https://copilot.microsoft.com/*"],
+        "connect": [
+            "copilot.microsoft.com",
+            "bing.com",
+            "r.bing.com",
+            "edgeservices.bing.com",
         ],
-        'image_hosts': [
-            '*://*.grok.com/*',
-        ]
     },
-    'copilot': {
-        'name': 'Copilot',
-        'matches': [
-            'https://copilot.microsoft.com/*'
+    "gemini": {
+        "name": "Gemini",
+        "matches": ["https://gemini.google.com/*", "https://aistudio.google.com/*"],
+        "includes": ["*://gemini.google.com/*", "*://aistudio.google.com/*"],
+        "image_hosts": [
+            "*://*.googleusercontent.com/*",
+            "*://*.googleapis.com/*",
+            "*://lh3.google.com/*",
         ],
-        'connect': [
-            'copilot.microsoft.com',
-            'bing.com',
-            'r.bing.com',
-            'edgeservices.bing.com'
-        ]
     },
-    'gemini': {
-        'name': 'Gemini',
-        'matches': [
-            'https://gemini.google.com/*',
-            'https://aistudio.google.com/*'
-        ],
-        'includes': [
-            '*://gemini.google.com/*',
-            '*://aistudio.google.com/*'
-        ]
-    }
 }
 
-def apply_mirrors_to_code(code, mirrors):
-    """
-    将镜像域名注入到 JS 代码的 claude.ai 检测中。
-    替换 host.includes('claude.ai') → 同时匹配镜像域名。
-    """
+USERSCRIPT_PLATFORMS = ["claude", "chatgpt", "grok", "gemini"]
+REQUIRED_SOURCE_FILES = [
+    "userscript-adapter.js",
+    "extension-adapter.js",
+    "common-base.js",
+    "markdown-core.js",
+    "common-ui.js",
+    "claude.js",
+    "chatgpt.js",
+    "grok.js",
+    "gemini.js",
+    "copilot.js",
+]
+
+
+class BuildError(RuntimeError):
+    """Build failure with a user-facing message."""
+
+
+def read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        try:
+            label = path.relative_to(ROOT)
+        except ValueError:
+            label = path
+        raise BuildError(f"Missing required file: {label}") from exc
+
+
+def write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8", newline="\n")
+
+
+def read_package() -> dict:
+    try:
+        return json.loads(read_text(PACKAGE_JSON))
+    except json.JSONDecodeError as exc:
+        raise BuildError(f"Invalid package.json: {exc}") from exc
+
+
+def read_package_version() -> str:
+    version = str(read_package().get("version", "")).strip()
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise BuildError(
+            "package.json version must use three numeric components, for example 26.3.1"
+        )
+    return version
+
+
+def npm_executable() -> str:
+    candidates = ["npm.cmd", "npm"] if sys.platform == "win32" else ["npm"]
+    for candidate in candidates:
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    raise BuildError("Cannot find npm in PATH")
+
+
+def run_command(command: list[str], *, extra_env: dict[str, str] | None = None) -> None:
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    print("  $ " + " ".join(command))
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        shell=False,
+    )
+    if result.stdout:
+        print(result.stdout.rstrip())
+    if result.returncode != 0:
+        if result.stderr:
+            print(result.stderr.rstrip(), file=sys.stderr)
+        raise BuildError(
+            f"Command failed with exit code {result.returncode}: {' '.join(command)}"
+        )
+
+
+def selected_platforms(platform: str | None, *, userscript: bool = False) -> list[str]:
+    allowed = USERSCRIPT_PLATFORMS if userscript else list(PLATFORMS)
+    if platform is None:
+        return list(allowed)
+    if platform not in allowed:
+        raise BuildError(
+            f"Unknown platform '{platform}'. Available platforms: {', '.join(allowed)}"
+        )
+    return [platform]
+
+
+def apply_mirrors_to_code(code: str, mirrors: Iterable[str]) -> str:
+    mirrors = list(mirrors)
     if not mirrors:
         return code
-
-    mirror_hostnames = [m.replace('https://', '').replace('http://', '') for m in mirrors]
-    extra = ' || ' + ' || '.join(f"host.includes('{h}')" for h in mirror_hostnames)
-
-    # 平台检测：common-base.js 中的 host.includes('claude.ai')
-    code = code.replace(
+    hostnames = [m.replace("https://", "").replace("http://", "") for m in mirrors]
+    extra = " || " + " || ".join(f"host.includes('{host}')" for host in hostnames)
+    return code.replace(
         "host.includes('claude.ai')",
-        f"(host.includes('claude.ai'){extra})"
+        f"(host.includes('claude.ai'){extra})",
     )
-    return code
 
 
-def patch_react_sources(mirrors):
-    """
-    在 React 构建前临时向 validationUtils.js 和 App.js 注入镜像 origin，
-    返回还原函数。
-    """
-    if not mirrors:
-        return lambda: None  # no-op restorer
-
-    target_files = [
-        Path('src/utils/data/validationUtils.js'),
-        Path('src/App.js'),
-    ]
-    originals = {}
-
-    for fp in target_files:
-        if not fp.exists():
-            continue
-        original = fp.read_text(encoding='utf-8')
-        originals[fp] = original
-
-        patched = original
-        for mirror in mirrors:
-            # 在 'https://claude.ai', 后插入镜像行（只插入一次）
-            marker = "'https://claude.ai',"
-            insert = f"\n      '{mirror}',"
-            if mirror not in patched and marker in patched:
-                patched = patched.replace(marker, marker + insert, 1)
-        fp.write_text(patched, encoding='utf-8')
-
-    def restore():
-        for fp, original in originals.items():
-            fp.write_text(original, encoding='utf-8')
-
-    return restore
+@contextmanager
+def patched_react_sources(mirrors: Iterable[str]):
+    mirrors = list(mirrors)
+    originals: dict[Path, str] = {}
+    targets = [SRC_DIR / "utils/data/validationUtils.js", SRC_DIR / "App.js"]
+    try:
+        if mirrors:
+            for path in targets:
+                if not path.exists():
+                    continue
+                original = read_text(path)
+                originals[path] = original
+                patched = original
+                for mirror in mirrors:
+                    marker = "'https://claude.ai',"
+                    insert = f"\n      '{mirror}',"
+                    if mirror not in patched and marker in patched:
+                        patched = patched.replace(marker, marker + insert, 1)
+                write_text(path, patched)
+        yield
+    finally:
+        for path, original in originals.items():
+            write_text(path, original)
 
 
-def strip_platform_code(code, target_platforms):
-    """
-    Strip code blocks not matching target platforms.
+def strip_platform_code(code: str, targets: list[str] | None) -> str:
+    if targets is None:
+        return code
 
-    Supports two marker syntaxes:
-    1. Line markers (multi-line blocks):
-       // #platform: chatgpt,copilot
-       ... code to strip ...
-       // #endplatform
+    target_set = set(targets)
+    result_lines: list[str] = []
+    active_stack: list[bool] = []
 
-    2. Inline markers (within a single line):
-       ['claude'/* #platform: chatgpt */, 'chatgpt'/* #endplatform */]
-    """
-    if target_platforms is None:
-        return code  # Full build: keep everything
-
-    target_set = set(target_platforms)
-
-    # 1. Strip line-based platform blocks
-    result_lines = []
-    skipping = False
-    for line in code.split('\n'):
+    for line in code.splitlines():
         stripped = line.strip()
-
-        # Check for block start: // #platform: xxx,yyy
-        match_start = re.match(r'^//\s*#platform:\s*(.+)$', stripped)
-        if match_start:
-            block_platforms = {p.strip() for p in match_start.group(1).split(',')}
-            if not block_platforms & target_set:
-                skipping = True  # None of the block's platforms are in target
-            else:
-                pass  # Keep this block, just skip the marker comment itself
-            continue  # Don't include the marker line itself
-
-        # Check for block end: // #endplatform
-        if re.match(r'^//\s*#endplatform$', stripped):
-            skipping = False
-            continue  # Don't include the marker line itself
-
-        if not skipping:
+        start = re.match(r"^//\s*#platform:\s*(.+)$", stripped)
+        if start:
+            block_platforms = {item.strip() for item in start.group(1).split(",")}
+            active_stack.append(bool(block_platforms & target_set))
+            continue
+        if re.match(r"^//\s*#endplatform$", stripped):
+            if not active_stack:
+                raise BuildError("Unbalanced // #endplatform marker")
+            active_stack.pop()
+            continue
+        if not active_stack or all(active_stack):
             result_lines.append(line)
 
-    code = '\n'.join(result_lines)
+    if active_stack:
+        raise BuildError("Unclosed // #platform marker")
 
-    # 2. Strip inline platform markers: /* #platform: xxx */ content /* #endplatform */
-    def inline_replacer(match):
-        block_platforms = {p.strip() for p in match.group(1).split(',')}
-        content = match.group(2)
-        if block_platforms & target_set:
-            return content  # Keep content, strip markers
-        else:
-            return ''  # Strip content and markers
+    code = "\n".join(result_lines)
+
+    def replace_inline(match: re.Match[str]) -> str:
+        block_platforms = {item.strip() for item in match.group(1).split(",")}
+        return match.group(2) if block_platforms & target_set else ""
 
     code = re.sub(
-        r'/\*\s*#platform:\s*([^*]+?)\s*\*/(.*?)/\*\s*#endplatform\s*\*/',
-        inline_replacer,
-        code
+        r"/\*\s*#platform:\s*([^*]+?)\s*\*/(.*?)/\*\s*#endplatform\s*\*/",
+        replace_inline,
+        code,
+        flags=re.DOTALL,
     )
+    code = re.sub(r",(\s*\n\s*[}\]])", r"\1", code)
+    return re.sub(r"\n{3,}", "\n\n", code)
 
-    # 3. Cleanup: remove trailing commas before closing braces/brackets, empty lines from stripping
-    code = re.sub(r',(\s*\n\s*[}\]])', r'\1', code)
-    # Remove excessive blank lines (3+ consecutive → 2)
-    code = re.sub(r'\n{3,}', '\n\n', code)
 
-    return code
+def extract_styles_from_ui(ui_code: str) -> str:
+    match = re.search(r"GM_addStyle\s*\(\s*`([\s\S]*?)`\s*\)", ui_code)
+    if not match:
+        return ""
+    return "\n".join(line.strip() for line in match.group(1).splitlines() if line.strip())
 
-def read_file(filepath):
-    """读取文件内容"""
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return f.read()
-    except FileNotFoundError:
-        print(f"错误: 找不到文件 {filepath}")
-        sys.exit(1)
 
-def write_file(filepath, content):
-    """写入文件内容"""
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write(content)
-
-PLATFORM_DESCRIPTIONS = {
-    'claude': {
-        'name': 'Loominary for Claude',
-        'name_zh': '全功能Claude对话跨分支全局搜索文档PDF长截图导出管理工具',
-        'desc': 'One-click export for Claude. Backups all chat branches, artifacts, and attachments. Exports to JSON/Markdown/PDF/Editable Screenshots.',
-        'desc_zh': '一键导出 Claude 对话记录（支持分支、PDF、长截图）。保留完整对话分支、附加图片、LaTeX 公式、Artifacts、附件与思考过程。',
-    },
-}
-
-def extract_styles_from_ui(ui_code):
-    """从 common-ui.js 中提取 CSS 样式"""
-    # 匹配 GM_addStyle(`...`) 中的内容
-    pattern = r"GM_addStyle\s*\(\s*`([\s\S]*?)`\s*\)"
-    match = re.search(pattern, ui_code)
-    if match:
-        css = match.group(1)
-        # 清理缩进
-        lines = css.split('\n')
-        cleaned_lines = []
-        for line in lines:
-            # 移除前导空格（保持CSS缩进结构）
-            cleaned = line.strip()
-            if cleaned:
-                cleaned_lines.append(cleaned)
-        return '\n'.join(cleaned_lines)
-    return ""
-
-# Userscript 发布的平台
-USERSCRIPT_PLATFORMS = ['claude', 'chatgpt', 'grok', 'gemini']
-
-def generate_userscript_header(platforms):
-    """生成 Userscript 的 ==UserScript== 元数据块"""
-    us_platforms = platforms or USERSCRIPT_PLATFORMS
-    matches = []
-    for p in us_platforms:
-        matches.extend(PLATFORMS.get(p, {}).get('matches', []))
-
-    match_lines = '\n'.join(f'// @match        {m}' for m in matches)
-
-    return f"""\
-// ==UserScript==
+def userscript_header(platforms: list[str], version: str) -> str:
+    match_lines = "\n".join(
+        f"// @match        {match}"
+        for platform in platforms
+        for match in PLATFORMS[platform]["matches"]
+    )
+    return f"""// ==UserScript==
 // @name         Loominary (One-Click AI Chat Backup)
 // @name:zh-CN   支持Claude、ChatGPT、Grok、Gemini等多平台的全功能AI对话跨分支全局搜索文档PDF长截图导出管理工具
 // @name:zh-TW   Loominary (一鍵 AI 對話備份)
@@ -282,523 +280,510 @@ def generate_userscript_header(platforms):
 // @name:pt      Loominary (Backup de Chat AI com Um Clique)
 // @name:fr      Loominary (Sauvegarde de Chat AI en Un Clic)
 // @name:de      Loominary (Ein-Klick AI-Chat-Backup)
-// @namespace    https://github.com/Laumss/loominary
-// @version      {VERSION}
-// @description One-click export for Claude, ChatGPT, Grok, Gemini , Google AI Studio. Backups all chat branches, artifacts, and attachments. Exports to JSON/Markdown/PDF/Editable Screenshots. The ultimate companion for Lyra Exporter to build your local AI knowledge base.
-// @description:zh-CN  一键导出 Claude/ChatGPT/Gemini/Grok/Google AI Studio 对话记录（支持分支、PDF、长截图）。保留完整对话分支、附加图片、LaTeX 公式、Artifacts、附件与思考过程。Lyra Exporter 的最佳搭档，打造您的本地 AI 知识库。
-// @description:zh-TW 一鍵匯出 Claude、ChatGPT、Grok、Gemini、Google AI Studio 的對話。備份所有聊天分支、Artifacts 和附件。匯出為 JSON/Markdown/PDF/可編輯截圖。Lyra Exporter 的終極配套工具，用於建構本地 AI 知識庫。
-// @description:ja Claude、ChatGPT、Grok、Gemini、Google AI Studio のワンクリックエクスポート。すべてのチャットブランチ、アーティファクト、添付ファイルをバックアップ。JSON/Markdown/PDF/編集可能なスクリーンショットにエクスポート。ローカル AI ナレッジベース構築のための Lyra Exporter の究極のコンパニオン。
-// @description:ko Claude, ChatGPT, Grok, Gemini, Google AI Studio 원클릭 내보내기. 모든 채팅 브랜치, 아티팩트 및 첨부 파일 백업. JSON/Markdown/PDF/편집 가능한 스크린샷으로 내보내기. 로컬 AI 지식 베이스 구축을 위한 Lyra Exporter의 궁극적인 동반자.
-// @description:es Exportación con un clic para Claude, ChatGPT, Grok, Gemini, Google AI Studio. Respalda todas las ramas de chat, artefactos y adjuntos. Exporta a JSON/Markdown/PDF/Capturas editables. El compañero definitivo de Lyra Exporter para construir tu base de conocimiento de IA local.
-// @description:pt Exportação com um clique para Claude, ChatGPT, Grok, Gemini, Google AI Studio. Faz backup de todas as ramificações de chat, artefatos e anexos. Exporta para JSON/Markdown/PDF/Capturas editáveis. O companheiro definitivo do Lyra Exporter para construir sua base de conhecimento de IA local.
-// @description:fr Exportation en un clic pour Claude, ChatGPT, Grok, Gemini, Google AI Studio. Sauvegarde toutes les branches de chat, artefacts et pièces jointes. Exporte vers JSON/Markdown/PDF/Captures modifiables. Le compagnon ultime de Lyra Exporter pour construire votre base de connaissances IA locale.
-// @description:de Ein-Klick-Export für Claude, ChatGPT, Grok, Gemini, Google AI Studio. Sichert alle Chat-Branches, Artefakte und Anhänge. Exportiert nach JSON/Markdown/PDF/Bearbeitbare Screenshots. Der ultimative Begleiter für Lyra Exporter zum Aufbau Ihrer lokalen AI-Wissensdatenbank.
-// @author       Laumss
-// @homepage     https://laumss.github.io/react/welcome
-// @supportURL   https://github.com/Laumss/loominary/issues
-// @match        https://claude.ai/*
-// @match        https://chatgpt.com/*
-// @match        https://chat.openai.com/*
-// @match        https://grok.com/*
-// @match        https://gemini.google.com/*
-// @match        https://aistudio.google.com/*
+// @namespace    https://github.com/sgndai/loominary
+// @version      {version}
+// @description One-click export for Claude, ChatGPT, Grok, Gemini and Google AI Studio. Backups all chat branches, artifacts, and attachments. Exports to JSON/Markdown/PDF/Editable Screenshots.
+// @description:zh-CN  一键导出 Claude、ChatGPT、Gemini、Grok 与 Google AI Studio 对话记录，保留完整对话分支、附件、公式、Artifacts 与思考过程。
+// @description:zh-TW 一鍵匯出 Claude、ChatGPT、Grok、Gemini 與 Google AI Studio 的對話，保留聊天分支、Artifacts 和附件。
+// @description:ja Claude、ChatGPT、Grok、Gemini、Google AI Studio の会話をワンクリックでエクスポートします。
+// @description:ko Claude, ChatGPT, Grok, Gemini, Google AI Studio 대화를 한 번에 내보냅니다.
+// @description:es Exportación con un clic para Claude, ChatGPT, Grok, Gemini y Google AI Studio.
+// @description:pt Exportação com um clique para Claude, ChatGPT, Grok, Gemini e Google AI Studio.
+// @description:fr Exportation en un clic pour Claude, ChatGPT, Grok, Gemini et Google AI Studio.
+// @description:de Ein-Klick-Export für Claude, ChatGPT, Grok, Gemini und Google AI Studio.
+// @author       Laumss; sgndai fork
+// @homepage     https://github.com/sgndai/loominary
+// @supportURL   https://github.com/sgndai/loominary/issues
+{match_lines}
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @run-at       document-start
 // @license      MIT
-// @downloadURL  https://update.greasyfork.org/scripts/539579/Loominary%20%28One-Click%20AI%20Chat%20Backup%29.user.js
-// @updateURL    https://update.greasyfork.org/scripts/539579/Loominary%20%28One-Click%20AI%20Chat%20Backup%29.meta.js
 // ==/UserScript==
 """
 
-def build_userscript(platforms=None):
-    """构建 Userscript（claude + grok + gemini）"""
-    src_dir = Path('src')
-    dist_dir = Path('dist')
-    dist_dir.mkdir(exist_ok=True)
 
-    us_platforms = platforms or USERSCRIPT_PLATFORMS
-    output_name = 'loominary.user.js'
-    build_type = '+'.join(us_platforms)
+def userscript_output_name(platforms: list[str]) -> str:
+    if platforms == USERSCRIPT_PLATFORMS:
+        return "loominary.user.js"
+    return f"loominary-{'-'.join(platforms)}.user.js"
 
-    output_path = dist_dir / output_name
 
-    print(f"[Userscript] 构建 {build_type} 版本...")
+def common_bundle_parts(
+    adapter_name: str, platforms: list[str]
+) -> tuple[str, str, str, list[str]]:
+    adapter = read_text(SRC_DIR / adapter_name)
+    common_base = read_text(SRC_DIR / "common-base.js")
+    markdown_core = read_text(SRC_DIR / "markdown-core.js")
+    common_ui = read_text(SRC_DIR / "common-ui.js")
 
-    header = generate_userscript_header(us_platforms)
+    strip_targets = platforms if len(platforms) < len(PLATFORMS) else None
+    common_base = strip_platform_code(common_base, strip_targets)
+    common_ui = strip_platform_code(common_ui, strip_targets)
 
-    adapter_code = read_file(src_dir / 'userscript-adapter.js')
-    common_base_code = read_file(src_dir / 'common-base.js')
-    markdown_core_code = read_file(src_dir / 'markdown-core.js')
-    common_ui_code = read_file(src_dir / 'common-ui.js')
+    if "claude" in platforms:
+        common_base = apply_mirrors_to_code(common_base, CLAUDE_MIRRORS)
 
-    # Bundle fflate inline from node_modules (avoids @require CDN dependency)
-    # Use raw UMD: it sets (self/window).fflate, accessible as global within IIFE
-    fflate_umd = read_file(Path('node_modules/fflate/umd/index.js'))
-    fflate_inline = "// Inline fflate (bundled from node_modules)\n" + fflate_umd.rstrip() + " // eslint-disable-line"
+    platform_code = [read_text(SRC_DIR / f"{platform}.js") for platform in platforms]
+    return adapter, common_base, markdown_core, [*platform_code, common_ui]
 
-    # Strip non-target platform code from shared modules
-    strip_targets = us_platforms if len(us_platforms) < len(PLATFORMS) else None
-    common_base_code = strip_platform_code(common_base_code, strip_targets)
-    common_ui_code = strip_platform_code(common_ui_code, strip_targets)
 
-    platform_codes = []
-    for platform in us_platforms:
-        platform_path = src_dir / f'{platform}.js'
-        if platform_path.exists():
-            platform_codes.append(read_file(platform_path))
-        else:
-            print(f"  警告: 找不到 {platform} 模块 ({platform_path})，跳过")
+def fflate_source() -> Path:
+    path = ROOT / "node_modules/fflate/umd/index.js"
+    if not path.exists():
+        raise BuildError("Missing node_modules/fflate/umd/index.js. Run npm ci first.")
+    return path
 
-    output_lines = [
-        header,
+
+def build_userscript(platform: str | None = None) -> Path:
+    version = read_package_version()
+    platforms = selected_platforms(platform, userscript=True)
+    DIST_DIR.mkdir(exist_ok=True)
+    output = DIST_DIR / userscript_output_name(platforms)
+
+    adapter, common_base, markdown_core, remaining = common_bundle_parts(
+        "userscript-adapter.js", platforms
+    )
+    fflate_inline = read_text(fflate_source()).rstrip()
+
+    output_parts = [
+        userscript_header(platforms, version),
         "(function() {",
         "    'use strict';",
         "    if (window.loominaryFetchInitialized) return;",
         "    window.loominaryFetchInitialized = true;",
         "",
+        "// Inline fflate, sourced from the lockfile-installed dependency.",
         fflate_inline,
         "",
-        adapter_code,
+        adapter,
         "",
-        common_base_code,
+        common_base,
         "",
-        markdown_core_code,
-        ""
-    ]
-
-    for platform_code in platform_codes:
-        output_lines.append(platform_code)
-        output_lines.append("")
-
-    output_lines.append(common_ui_code)
-    output_lines.append("")
-
-    output_lines.extend([
+        markdown_core,
+        "",
+        *remaining,
+        "",
         "    init();",
-        "})();"
-    ])
+        "})();",
+        "",
+    ]
+    write_text(output, "\n".join(output_parts))
+    print(f"[Userscript] {output.relative_to(ROOT)} ({output.stat().st_size:,} bytes)")
+    return output
 
-    output_content = '\n'.join(output_lines)
-    write_file(output_path, output_content)
 
-    file_size = output_path.stat().st_size
-    print(f"  ✓ 构建成功: {output_path} ({file_size:,} bytes)")
-
-    return output_path
-
-def build_react_pages():
-    """构建 React App 并推送到 GitHub Pages（https://Laumss.github.io/react）"""
-    print("[Pages] 构建 React App 并部署到 GitHub Pages...")
-
-    restore_react = patch_react_sources(CLAUDE_MIRRORS)
-    try:
-        result = subprocess.run(
-            'set GENERATE_SOURCEMAP=false && npm run build',
-            cwd=Path('.'), check=True, capture_output=True,
-            text=True, encoding='utf-8', shell=True
+def build_react_pages() -> Path:
+    print("[Pages] Building React application without deploying it...")
+    with patched_react_sources(CLAUDE_MIRRORS):
+        run_command(
+            [npm_executable(), "run", "build"],
+            extra_env={"GENERATE_SOURCEMAP": "false", "CI": "false"},
         )
-        print(f'  ✓ React App 构建成功')
-    except subprocess.CalledProcessError as e:
-        print(e.stdout[-2000:] if e.stdout else '')
-        print(e.stderr[-2000:] if e.stderr else '')
-        restore_react()
-        sys.exit(1)
-    finally:
-        restore_react()
-
-    build_size = sum(f.stat().st_size for f in Path('build').rglob('*') if f.is_file())
-    print(f"  ✓ React 构建完成 ({build_size:,} bytes)")
-
-    print("[Pages] 推送到 GitHub Pages (Laumss/react gh-pages 分支)...")
-    try:
-        result = subprocess.run(
-            'npm run deploy:pages',
-            cwd=Path('.'), check=True, capture_output=True,
-            text=True, encoding='utf-8', shell=True
-        )
-        print(result.stdout[-1000:] if result.stdout else '')
-        print("  ✓ 已推送到 https://Laumss.github.io/react")
-    except subprocess.CalledProcessError as e:
-        print(e.stdout[-2000:] if e.stdout else '')
-        print(e.stderr[-2000:] if e.stderr else '')
-        print("  ✗ 推送失败。请确认已创建 Laumss/react 仓库并配置了 GitHub Pages。")
-        sys.exit(1)
+    build_dir = ROOT / "build"
+    if not (build_dir / "index.html").exists():
+        raise BuildError("React build completed without build/index.html")
+    size = sum(path.stat().st_size for path in build_dir.rglob("*") if path.is_file())
+    print(f"[Pages] build/ ready ({size:,} bytes). No deployment was performed.")
+    return build_dir
 
 
-def build_extension_firefox(platforms=None):
-    """构建 Firefox 扩展（基于 Chrome 扩展，调整 manifest）"""
-    ext_dir = Path('chrome')
-    ff_dir = Path('firefox')
+def extension_manifest(platforms: list[str], version: str) -> dict:
+    matches: list[str] = []
+    host_permissions: list[str] = []
+    web_matches: list[str] = []
 
-    # 必须先有 Chrome 扩展构建产物
-    if not (ext_dir / 'content.js').exists():
-        print("[Firefox] Chrome 扩展尚未构建，先执行 build_extension()...")
-        build_extension(platforms)
+    for platform in platforms:
+        config = PLATFORMS[platform]
+        for match in config.get("matches", []):
+            if match not in matches:
+                matches.append(match)
+            if match not in host_permissions:
+                host_permissions.append(match)
+            scheme, rest = match.split("://", 1)
+            host = rest.split("/", 1)[0]
+            top_match = f"{scheme}://{host}/*"
+            if top_match not in web_matches:
+                web_matches.append(top_match)
+        for host in config.get("image_hosts", []):
+            if host not in host_permissions:
+                host_permissions.append(host)
 
-    if platforms:
-        build_label = '+'.join(platforms)
-    else:
-        build_label = 'all'
-    print(f"[Firefox] 构建 Firefox 扩展 ({build_label})...")
+    if "claude" in platforms:
+        for mirror in CLAUDE_MIRRORS:
+            match = mirror.rstrip("/") + "/*"
+            for collection in (matches, host_permissions, web_matches):
+                if match not in collection:
+                    collection.append(match)
 
-    # 复制 chrome/ → firefox/
-    if ff_dir.exists():
-        shutil.rmtree(ff_dir)
-    shutil.copytree(ext_dir, ff_dir)
-    print(f"  ✓ 复制 chrome/ → firefox/")
-
-    # 读取并修改 manifest.json → Firefox 版本
-    manifest_path = ff_dir / 'manifest.json'
-    manifest = json.loads(read_file(manifest_path))
-
-    # 1. 将 service_worker 改为 scripts（Firefox MV3 使用 background scripts）
-    if 'background' in manifest and 'service_worker' in manifest['background']:
-        manifest['background'] = {
-            'scripts': [manifest['background']['service_worker']]
-        }
-
-    # 2. 添加 browser_specific_settings（AMO 发布必须，本地调试也推荐）
-    manifest['browser_specific_settings'] = {
-        'gecko': {
-            'id': 'loominary@laumss',
-            'strict_min_version': '109.0'
-        }
+    return {
+        "manifest_version": 3,
+        "name": "Loominary",
+        "version": version,
+        "description": "Local-first AI conversation exporter and viewer.",
+        "permissions": ["storage", "downloads", "tabs", "sidePanel"],
+        "host_permissions": host_permissions,
+        "background": {"service_worker": "background.js"},
+        "action": {"default_title": "Open Loominary"},
+        "side_panel": {"default_path": "app/index.html"},
+        "icons": {"128": "icons/icon.png"},
+        "content_scripts": [
+            {
+                "matches": matches,
+                "js": ["fflate.min.js", "content.js"],
+                "css": ["styles.css"],
+                "run_at": "document_start",
+            }
+        ],
+        "web_accessible_resources": [
+            {"resources": ["injected.js"], "matches": web_matches}
+        ],
     }
 
-    # 3. downloads 权限（background.js 有 handleDownload，Firefox 也需要）
-    if 'downloads' not in manifest.get('permissions', []):
-        manifest.setdefault('permissions', []).append('downloads')
 
-    write_file(manifest_path, json.dumps(manifest, indent=2, ensure_ascii=False))
-    print(f"  ✓ 生成 Firefox manifest.json (background.scripts, gecko id)")
+def background_script() -> str:
+    return r"""'use strict';
 
-    # 打包为 zip（Firefox 加载 .zip 或解压目录均可）
-    zip_path = Path('dist') / f'loominary-firefox-{VERSION}.zip'
-    Path('dist').mkdir(exist_ok=True)
-    import zipfile
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for file in ff_dir.rglob('*'):
-            if file.is_file():
-                zf.write(file, file.relative_to(ff_dir))
-    zip_size = zip_path.stat().st_size
-    print(f"  ✓ 打包: {zip_path} ({zip_size:,} bytes)")
-    print(f"  ✓ Firefox 扩展构建完成: {ff_dir}/")
-    print(f"    安装方式: about:debugging → 临时加载附加组件 → 选 firefox/manifest.json")
-    print(f"    AMO 提交: 上传 {zip_path}")
+async function serializeResponse(response, responseType) {
+  if (responseType === 'blob' || responseType === 'arraybuffer') {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    const encoded = btoa(binary);
+    if (responseType === 'blob') {
+      const type = response.headers.get('content-type') || 'application/octet-stream';
+      return `data:${type};base64,${encoded}`;
+    }
+    return encoded;
+  }
+  if (responseType === 'json') return response.json();
+  return response.text();
+}
 
-    return ff_dir
+async function proxyFetch(options = {}) {
+  const response = await fetch(options.url, {
+    method: options.method || 'GET',
+    headers: options.headers || {},
+    body: options.body,
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    return { success: false, status: response.status, error: `HTTP ${response.status}` };
+  }
+  return {
+    success: true,
+    status: response.status,
+    data: await serializeResponse(response, options.responseType || 'text'),
+  };
+}
 
+async function openViewer(sender, data) {
+  await chrome.storage.local.set({ loominary_pending_data: data });
+  const tabId = sender.tab?.id;
+  if (tabId && chrome.sidePanel?.open) {
+    try {
+      await chrome.sidePanel.setOptions({ tabId, path: 'app/index.html', enabled: true });
+      await chrome.sidePanel.open({ tabId });
+      return { success: true, mode: 'side-panel' };
+    } catch (error) {
+      console.warn('[Loominary] Side panel failed, opening a tab instead:', error);
+    }
+  }
+  const tab = await chrome.tabs.create({ url: chrome.runtime.getURL('app/index.html') });
+  return { success: true, mode: 'tab', tabId: tab.id };
+}
 
-def build_extension(platforms=None):
-    """构建 Chrome 扩展"""
-    src_dir = Path('src')
-    ext_dir = Path('chrome')
-    ext_dir.mkdir(exist_ok=True)
-    (ext_dir / 'icons').mkdir(exist_ok=True)
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'LOOMINARY_FETCH') {
+    proxyFetch(message.options)
+      .then(sendResponse)
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+  if (message?.type === 'LOOMINARY_OPEN_SIDEPANEL') {
+    openViewer(sender, message.data)
+      .then(sendResponse)
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+  return false;
+});
 
-    if platforms:
-        build_label = '+'.join(platforms)
-    else:
-        build_label = 'all'
-    print(f"[Extension] 构建 Chrome 扩展 ({build_label})...")
-
-    # 1. 更新 manifest.json 版本号，并注入镜像域名
-    manifest_path = ext_dir / 'manifest.json'
-    if manifest_path.exists():
-        manifest = json.loads(read_file(manifest_path))
-        manifest['version'] = VERSION
-
-        # 注入镜像到 manifest（仅 Claude 构建时注入）
-        if CLAUDE_MIRRORS and (platforms is None or 'claude' in platforms):
-            mirror_matches = [m.rstrip('/') + '/*' for m in CLAUDE_MIRRORS]
-            # host_permissions
-            host_perms = manifest.get('host_permissions', [])
-            for mm in mirror_matches:
-                if mm not in host_perms:
-                    host_perms.append(mm)
-            manifest['host_permissions'] = host_perms
-            # content_scripts matches
-            for cs in manifest.get('content_scripts', []):
-                for mm in mirror_matches:
-                    if mm not in cs.get('matches', []):
-                        cs.setdefault('matches', []).append(mm)
-            # web_accessible_resources matches
-            for war in manifest.get('web_accessible_resources', []):
-                for mm in mirror_matches:
-                    if mm not in war.get('matches', []):
-                        war.setdefault('matches', []).append(mm)
-            print(f"  ✓ 注入镜像域名到 manifest.json: {mirror_matches}")
-
-        # 为各构建平台注入 host_permissions / content_scripts / web_accessible_resources
-        # Gemini 图片 CDN（background 代理抓取时需要 host_permissions）
-        GEMINI_IMAGE_HOSTS = [
-            '*://*.googleusercontent.com/*',
-            '*://*.googleapis.com/*',
-            '*://lh3.google.com/*',
-        ]
-        target_platforms_for_manifest = platforms if platforms else list(PLATFORMS.keys())
-        for platform in target_platforms_for_manifest:
-            pcfg = PLATFORMS.get(platform, {})
-            pmatches = pcfg.get('matches', [])
-            if not pmatches:
-                continue
-
-            # host_permissions
-            host_perms = manifest.setdefault('host_permissions', [])
-            for m in pmatches:
-                if m not in host_perms:
-                    host_perms.append(m)
-
-            # Gemini 额外图片 CDN host_permissions
-            if platform == 'gemini':
-                for gh in GEMINI_IMAGE_HOSTS:
-                    if gh not in host_perms:
-                        host_perms.append(gh)
-
-            # 平台自带图片 CDN host_permissions
-            for ih in pcfg.get('image_hosts', []):
-                if ih not in host_perms:
-                    host_perms.append(ih)
-
-            # content_scripts：在已有的 cs 块中追加 matches
-            existing_cs = manifest.get('content_scripts', [])
-            if existing_cs:
-                cs = existing_cs[0]
-                for m in pmatches:
-                    if m not in cs.get('matches', []):
-                        cs.setdefault('matches', []).append(m)
-            else:
-                manifest['content_scripts'] = [{
-                    'matches': list(pmatches),
-                    'js': ['fflate.min.js', 'content.js'],
-                    'css': ['styles.css'],
-                    'run_at': 'document_start'
-                }]
-
-            # web_accessible_resources：追加 matches（injected.js 需要对所有平台可访问）
-            # 注意：web_accessible_resources 的 matches 必须是顶级 /* pattern，
-            # 子路径（如 /i/grok/*）在某些 Chrome 版本会触发 Invalid match pattern 错误
-            for war in manifest.get('web_accessible_resources', []):
-                existing = war.setdefault('matches', [])
-                for m in pmatches:
-                    import re as _re
-                    mat = _re.match(r'^(\*|https?)://(.*?)(/.*)', m)
-                    if mat:
-                        scheme, host, path = mat.group(1), mat.group(2), mat.group(3)
-                        top = f'{scheme}://{host}/*'
-                    else:
-                        top = m
-                    if top not in existing:
-                        existing.append(top)
-
-        print(f"  ✓ 注入平台域名到 manifest.json: {target_platforms_for_manifest}")
-
-        write_file(manifest_path, json.dumps(manifest, indent=2, ensure_ascii=False))
-        print(f"  ✓ 更新 manifest.json 版本号: {VERSION}")
-
-    # 2. 读取源代码
-    adapter_code = read_file(src_dir / 'extension-adapter.js')
-    common_base_code = read_file(src_dir / 'common-base.js')
-    markdown_core_code = read_file(src_dir / 'markdown-core.js')
-    common_ui_code = read_file(src_dir / 'common-ui.js')
-
-    # Strip non-target platform code from shared modules
-    strip_targets = platforms if (platforms and len(platforms) < len(PLATFORMS)) else None
-    common_base_code = strip_platform_code(common_base_code, strip_targets)
-    common_ui_code = strip_platform_code(common_ui_code, strip_targets)
-
-    # 注入镜像域名到平台检测代码
-    if CLAUDE_MIRRORS and (platforms is None or 'claude' in platforms):
-        common_base_code = apply_mirrors_to_code(common_base_code, CLAUDE_MIRRORS)
-        print(f"  ✓ 注入镜像域名到 content.js: {CLAUDE_MIRRORS}")
-
-    # 读取平台代码（全部或指定平台）
-    target_platforms = platforms if platforms else list(PLATFORMS.keys())
-    platform_codes = []
-    for platform in target_platforms:
-        platform_path = src_dir / f'{platform}.js'
-        if platform_path.exists():
-            platform_codes.append(read_file(platform_path))
-        else:
-            print(f"  警告: 找不到 {platform} 模块 ({platform_path})，跳过")
-
-    # 3. 构建 content.js（主要内容脚本）
-    content_js_lines = [
-        "// ============================================================",
-        "// Loominary - Content Script",
-        f"// Version: {VERSION}",
-        f"// Built: {datetime.now().isoformat()}",
-        "// ============================================================",
-        "",
-        "(function() {",
-        "    'use strict';",
-        "    if (window.loominaryFetchInitialized) return;",
-        "    window.loominaryFetchInitialized = true;",
-        "",
-        "    // 注入页面上下文脚本（用于拦截 fetch/XHR）",
-        "    const script = document.createElement('script');",
-        "    script.src = chrome.runtime.getURL('injected.js');",
-        "    script.onload = function() { this.remove(); };",
-        "    (document.head || document.documentElement).appendChild(script);",
-        "",
-        "    // 监听来自注入脚本的消息",
-        "    window.addEventListener('message', (event) => {",
-        "        if (event.source !== window) return;",
-        "        if (event.data.type === 'LOOMINARY_USER_ID_CAPTURED') {",
-        "            localStorage.setItem('claudeUserId', event.data.userId);",
-        "        }",
-        "        if (event.data.type === 'LOOMINARY_TOKEN_CAPTURED') {",
-        "            localStorage.setItem('chatGPTToken', event.data.token);",
-        "        }",
-        "    });",
-        "",
-        adapter_code,
-        "",
-        common_base_code,
-        "",
-        markdown_core_code,
-        "",
-    ]
-
-    for platform_code in platform_codes:
-        content_js_lines.append(platform_code)
-        content_js_lines.append("")
-
-    content_js_lines.append(common_ui_code)
-    content_js_lines.append("")
-    content_js_lines.extend([
-        "    init();",
-        "})();"
-    ])
-
-    content_js = '\n'.join(content_js_lines)
-    write_file(ext_dir / 'content.js', content_js)
-    print(f"  ✓ 构建 content.js ({len(content_js):,} bytes)")
-
-    # 4. 提取并构建 styles.css
-    css_content = extract_styles_from_ui(common_ui_code)
-    css_header = f"""/* ============================================================
- * Loominary - Extension Styles
- * Version: {VERSION}
- * Built: {datetime.now().isoformat()}
- * ============================================================ */
-
+chrome.action.onClicked.addListener(async tab => {
+  if (tab.id && chrome.sidePanel?.open) {
+    try {
+      await chrome.sidePanel.setOptions({ tabId: tab.id, path: 'app/index.html', enabled: true });
+      await chrome.sidePanel.open({ tabId: tab.id });
+      return;
+    } catch (_) {}
+  }
+  await chrome.tabs.create({ url: chrome.runtime.getURL('app/index.html') });
+});
 """
-    write_file(ext_dir / 'styles.css', css_header + css_content)
-    print(f"  ✓ 构建 styles.css ({len(css_content):,} bytes)")
 
-    # 5. 复制 fflate 库（需要手动下载或使用 CDN）
-    # 在扩展中，我们需要将 fflate 作为本地文件包含
-    fflate_notice = ext_dir / 'FFLATE_NOTICE.txt'
-    write_file(fflate_notice, """fflate 库需要手动添加：
 
-1. 下载 fflate: https://cdn.jsdelivr.net/npm/fflate@0.7.4/umd/index.js
-2. 保存为 chrome/fflate.min.js
-3. 在 manifest.json 的 content_scripts.js 数组开头添加 "fflate.min.js"
+def injected_script() -> str:
+    return r"""(() => {
+  'use strict';
+  if (window.__loominaryInjected) return;
+  window.__loominaryInjected = true;
 
-或者在代码中使用动态加载方式。
-""")
+  const emit = (type, payload) => window.postMessage({ type, ...payload }, window.location.origin);
+  const inspectUrl = url => {
+    const value = String(url || '');
+    const match = value.match(/\/api\/organizations\/([a-f0-9-]+)\//i);
+    if (match?.[1]) emit('LOOMINARY_USER_ID_CAPTURED', { userId: match[1] });
+  };
+  const inspectHeaders = headers => {
+    try {
+      const normalized = new Headers(headers || {});
+      const authorization = normalized.get('authorization') || '';
+      if (authorization.startsWith('Bearer ')) {
+        emit('LOOMINARY_TOKEN_CAPTURED', { token: authorization.slice(7) });
+      }
+    } catch (_) {}
+  };
 
-    # 6. 构建 React App 并复制到 chrome/app/
-    print(f"  [React] 开始构建 React App...")
+  const originalFetch = window.fetch;
+  window.fetch = function(resource, options = {}) {
+    inspectUrl(typeof resource === 'string' ? resource : resource?.url);
+    inspectHeaders(options.headers || resource?.headers);
+    return originalFetch.apply(this, arguments);
+  };
 
-    # 构建前：临时向 React 源文件注入镜像 origin
-    restore_react = patch_react_sources(
-        CLAUDE_MIRRORS if (platforms is None or 'claude' in (platforms or [])) else []
+  const originalOpen = XMLHttpRequest.prototype.open;
+  const originalSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+  XMLHttpRequest.prototype.open = function(method, url) {
+    inspectUrl(url);
+    return originalOpen.apply(this, arguments);
+  };
+  XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+    if (String(name).toLowerCase() === 'authorization') {
+      inspectHeaders({ authorization: value });
+    }
+    return originalSetHeader.apply(this, arguments);
+  };
+})();
+"""
+
+
+def build_extension(platform: str | None = None) -> Path:
+    version = read_package_version()
+    platforms = selected_platforms(platform)
+    print(f"[Extension] Building platforms: {', '.join(platforms)}")
+
+    if CHROME_DIR.exists():
+        shutil.rmtree(CHROME_DIR)
+    (CHROME_DIR / "icons").mkdir(parents=True)
+
+    adapter, common_base, markdown_core, remaining = common_bundle_parts(
+        "extension-adapter.js", platforms
     )
-    if CLAUDE_MIRRORS and (platforms is None or 'claude' in (platforms or [])):
-        print(f"  ✓ 临时注入镜像 origin 到 React 源文件: {CLAUDE_MIRRORS}")
+    content = "\n".join(
+        [
+            "// Loominary content script",
+            f"// Version: {version}",
+            f"// Built: {datetime.now().isoformat()}",
+            "(function() {",
+            "    'use strict';",
+            "    if (window.loominaryFetchInitialized) return;",
+            "    window.loominaryFetchInitialized = true;",
+            "    const script = document.createElement('script');",
+            "    script.src = chrome.runtime.getURL('injected.js');",
+            "    script.onload = function() { this.remove(); };",
+            "    (document.head || document.documentElement).appendChild(script);",
+            "    window.addEventListener('message', event => {",
+            "        if (event.source !== window || event.origin !== window.location.origin) return;",
+            "        if (event.data?.type === 'LOOMINARY_USER_ID_CAPTURED') {",
+            "            localStorage.setItem('claudeUserId', event.data.userId);",
+            "        }",
+            "        if (event.data?.type === 'LOOMINARY_TOKEN_CAPTURED') {",
+            "            localStorage.setItem('chatGPTToken', event.data.token);",
+            "        }",
+            "    });",
+            adapter,
+            common_base,
+            markdown_core,
+            *remaining,
+            "    init();",
+            "})();",
+            "",
+        ]
+    )
+    write_text(CHROME_DIR / "content.js", content)
+
+    styles = extract_styles_from_ui(read_text(SRC_DIR / "common-ui.js"))
+    write_text(CHROME_DIR / "styles.css", f"/* Loominary {version} */\n{styles}\n")
+    write_text(CHROME_DIR / "background.js", background_script())
+    write_text(CHROME_DIR / "injected.js", injected_script())
+    write_text(
+        CHROME_DIR / "manifest.json",
+        json.dumps(extension_manifest(platforms, version), indent=2, ensure_ascii=False)
+        + "\n",
+    )
+    shutil.copy2(fflate_source(), CHROME_DIR / "fflate.min.js")
+
+    icon_source = ROOT / "public/favicon.png"
+    if not icon_source.exists():
+        icon_source = ROOT / "public/logo1024.png"
+    if not icon_source.exists():
+        raise BuildError("Missing public/favicon.png and public/logo1024.png")
+    shutil.copy2(icon_source, CHROME_DIR / "icons/icon.png")
+
+    build_dir = build_react_pages()
+    shutil.copytree(build_dir, CHROME_DIR / "app")
+    print(f"[Extension] {CHROME_DIR.relative_to(ROOT)}/ ready")
+    return CHROME_DIR
+
+
+def build_firefox(platform: str | None = None) -> Path:
+    version = read_package_version()
+    build_extension(platform)
+    if FIREFOX_DIR.exists():
+        shutil.rmtree(FIREFOX_DIR)
+    shutil.copytree(CHROME_DIR, FIREFOX_DIR)
+
+    manifest_path = FIREFOX_DIR / "manifest.json"
+    manifest = json.loads(read_text(manifest_path))
+    service_worker = manifest.get("background", {}).get("service_worker")
+    if service_worker:
+        manifest["background"] = {"scripts": [service_worker]}
+    manifest.pop("side_panel", None)
+    permissions = manifest.get("permissions", [])
+    manifest["permissions"] = [item for item in permissions if item != "sidePanel"]
+    manifest["browser_specific_settings"] = {
+        "gecko": {"id": "loominary@sgndai", "strict_min_version": "109.0"}
+    }
+    write_text(manifest_path, json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+
+    DIST_DIR.mkdir(exist_ok=True)
+    suffix = f"-{platform}" if platform else ""
+    zip_path = DIST_DIR / f"loominary-firefox{suffix}-{version}.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in FIREFOX_DIR.rglob("*"):
+            if path.is_file():
+                archive.write(path, path.relative_to(FIREFOX_DIR))
+    print(f"[Firefox] {zip_path.relative_to(ROOT)} ({zip_path.stat().st_size:,} bytes)")
+    return FIREFOX_DIR
+
+
+def check_platform_markers(path: Path) -> list[str]:
+    errors: list[str] = []
+    depth = 0
+    for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+        if re.match(r"^\s*//\s*#platform:", line):
+            depth += 1
+        elif re.match(r"^\s*//\s*#endplatform\s*$", line):
+            depth -= 1
+            if depth < 0:
+                errors.append(f"{path.relative_to(ROOT)}:{line_number}: unmatched #endplatform")
+                depth = 0
+    if depth:
+        errors.append(f"{path.relative_to(ROOT)}: {depth} unclosed #platform block(s)")
+    return errors
+
+
+def run_checks() -> None:
+    version = read_package_version()
+    errors: list[str] = []
+
+    for relative in REQUIRED_SOURCE_FILES:
+        path = SRC_DIR / relative
+        if not path.exists():
+            errors.append(f"Missing source file: src/{relative}")
+        else:
+            errors.extend(check_platform_markers(path))
+
+    required_root = [
+        PACKAGE_JSON,
+        ROOT / "src/App.js",
+        ROOT / "server/loominary-local-service.mjs",
+        ROOT / "tests/archive-loader.test.mjs",
+        ROOT / "tests/http-service.test.mjs",
+    ]
+    for path in required_root:
+        if not path.exists():
+            errors.append(f"Missing required file: {path.relative_to(ROOT)}")
+
+    if not fflate_source().exists():
+        errors.append("Missing node_modules/fflate/umd/index.js; run npm ci")
+
+    package = read_package()
+    scripts = package.get("scripts", {})
+    forbidden_scripts = [
+        name
+        for name in ("deploy:pages", "tauri", "tauri:dev", "tauri:build")
+        if name in scripts
+    ]
+    if forbidden_scripts:
+        errors.append("Forbidden obsolete scripts: " + ", ".join(forbidden_scripts))
+
+    all_header = userscript_header(USERSCRIPT_PLATFORMS, version)
+    chatgpt_header = userscript_header(["chatgpt"], version)
+    for forbidden in ("@downloadURL", "@updateURL", "Laumss/loominary/issues"):
+        if forbidden in all_header:
+            errors.append(f"Generated userscript header still contains {forbidden}")
+    if "https://claude.ai/*" in chatgpt_header or "https://grok.com/*" in chatgpt_header:
+        errors.append("Single-platform ChatGPT header contains another platform")
+
+    if errors:
+        raise BuildError("Static checks failed:\n- " + "\n- ".join(errors))
+    print(f"[Check] OK. Product version: {version}")
+
+
+def create_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Build Loominary artifacts")
+    subparsers = parser.add_subparsers(dest="command")
+
+    subparsers.add_parser("all", help="Build extension and userscript")
+    subparsers.add_parser("check", help="Run fast static build checks")
+    subparsers.add_parser("pages", help="Build the React application without deploying")
+
+    for command, help_text, platforms in (
+        ("userscript", "Build userscript", USERSCRIPT_PLATFORMS),
+        ("extension", "Build Chrome extension", list(PLATFORMS)),
+        ("firefox", "Build Firefox extension", list(PLATFORMS)),
+    ):
+        subparser = subparsers.add_parser(command, help=help_text)
+        subparser.add_argument("platform", nargs="?", choices=platforms)
+
+    return parser
+
+
+def main() -> int:
+    parser = create_parser()
+    argv = sys.argv[1:]
+    if argv and argv[0] in USERSCRIPT_PLATFORMS:
+        argv = ["userscript", argv[0], *argv[1:]]
+    args = parser.parse_args(argv)
+    command = args.command or "all"
 
     try:
-        result = subprocess.run(
-            'set GENERATE_SOURCEMAP=false && npm run build',
-            cwd=Path('.'),
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            shell=True
-        )
-        print(f"  ✓ React App 构建成功")
-    except subprocess.CalledProcessError as e:
-        print(f"  ✗ React App 构建失败:")
-        print(e.stdout[-2000:] if e.stdout else '')
-        print(e.stderr[-2000:] if e.stderr else '')
-        restore_react()
-        sys.exit(1)
-    finally:
-        restore_react()  # 构建完成后立即还原源文件
-
-    # 复制 build/ 到 chrome/app/
-    build_dir = Path('build')
-    app_dir = ext_dir / 'app'
-    if app_dir.exists():
-        shutil.rmtree(app_dir)
-    shutil.copytree(build_dir, app_dir)
-    app_size = sum(f.stat().st_size for f in app_dir.rglob('*') if f.is_file())
-    print(f"  ✓ 复制 build/ → chrome/app/ ({app_size:,} bytes)")
-
-    print(f"  ✓ 扩展构建完成: {ext_dir}/")
-
-    return ext_dir
-
-def main():
-    """主函数"""
-    print("=" * 60)
-    print("Build Script")
-    print("=" * 60)
-    print()
-
-    if len(sys.argv) < 2 or sys.argv[1] == 'all':
-        build_extension()
-        build_userscript()
-    elif sys.argv[1] == 'userscript':
-        build_userscript()
-    elif sys.argv[1] == 'pages':
-        build_react_pages()
-    elif sys.argv[1] == 'extension':
-        if len(sys.argv) >= 3:
-            ext_platform = sys.argv[2].lower()
-            if ext_platform not in PLATFORMS:
-                print(f"错误: 未知平台 '{ext_platform}'")
-                print(f"可用平台: {', '.join(PLATFORMS.keys())}")
-                sys.exit(1)
-            ext_platforms = [ext_platform]
-            if ext_platform == 'claude':
-                if 'gemini' not in ext_platforms:
-                    ext_platforms.append('gemini')
-                if 'grok' not in ext_platforms:
-                    ext_platforms.append('grok')
-            build_extension(platforms=ext_platforms)
-        else:
+        if command == "check":
+            run_checks()
+        elif command == "pages":
+            build_react_pages()
+        elif command == "userscript":
+            build_userscript(args.platform)
+        elif command == "extension":
+            build_extension(args.platform)
+        elif command == "firefox":
+            build_firefox(args.platform)
+        elif command == "all":
+            run_checks()
             build_extension()
-    elif sys.argv[1] == 'firefox':
-        if len(sys.argv) >= 3:
-            ext_platform = sys.argv[2].lower()
-            if ext_platform not in PLATFORMS:
-                print(f"错误: 未知平台 '{ext_platform}'")
-                print(f"可用平台: {', '.join(PLATFORMS.keys())}")
-                sys.exit(1)
-            ext_platforms = [ext_platform]
-            if ext_platform == 'claude':
-                if 'gemini' not in ext_platforms:
-                    ext_platforms.append('gemini')
-                if 'grok' not in ext_platforms:
-                    ext_platforms.append('grok')
-            build_extension_firefox(platforms=ext_platforms)
+            build_userscript()
         else:
-            build_extension_firefox()
-    else:
-        print(f"错误: 未知参数 '{sys.argv[1]}'")
-        print(f"可用选项: userscript, pages, extension [platform], firefox [platform]")
-        sys.exit(1)
+            parser.error(f"Unknown command: {command}")
+        return 0
+    except BuildError as error:
+        print(f"Build failed: {error}", file=sys.stderr)
+        return 1
 
-    print()
-    print("=" * 60)
-    print("构建完成!")
-    print("=" * 60)
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    raise SystemExit(main())
