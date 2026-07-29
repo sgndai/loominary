@@ -1,14 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
-import { loadArchive } from '../server/archive/loadArchive.mjs';
+import { validateConversationRecord } from '../server/archive/contract.mjs';
 
-// This fixture documents the minimum rich archive shape required for future adapters.
 test('archive model preserves rich message fields', async () => {
-  const archive = await loadArchive('tests/fixtures/archive-v1');
-  const conversation = archive.getConversation('conv-alpha');
+  const record = JSON.parse(
+    await readFile('tests/fixtures/archive-v1/rich-conversation.json', 'utf8')
+  );
 
-  assert.equal(conversation.conversation.platform, 'claude');
-  assert.ok(Array.isArray(conversation.messages));
-  assert.ok(Array.isArray(conversation.branches));
+  const validated = validateConversationRecord(record);
+  assert.equal(validated.messages[0].attachments[0].name, 'note.pdf');
+  assert.equal(validated.messages[1].citations[0].url, 'https://example.com');
+  assert.equal(validated.messages[1].thinking, 'hidden reasoning block');
+  assert.equal(validated.messages[1].toolCalls[0].name, 'web_search');
+});
+
+test('archive model rejects broken references', async () => {
+  const record = JSON.parse(
+    await readFile('tests/fixtures/archive-v1/rich-conversation.json', 'utf8')
+  );
+
+  const brokenParent = structuredClone(record);
+  brokenParent.messages[1].parentId = 'missing-message';
+  assert.throws(() => validateConversationRecord(brokenParent));
+
+  const brokenBranch = structuredClone(record);
+  brokenBranch.messages[1].branchId = 'missing-branch';
+  assert.throws(() => validateConversationRecord(brokenBranch));
 });
