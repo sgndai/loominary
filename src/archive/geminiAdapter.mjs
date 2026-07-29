@@ -91,23 +91,15 @@ function conversationId(meta, rawData, platform, messages) {
   return `${platform}-${stableHash(`${platform}|${title}|${signature}`)}`;
 }
 
-function selectedVersionIds(rawData) {
-  const selected = new Set();
-  const turns = Array.isArray(rawData.conversation) ? rawData.conversation : [];
-  turns.forEach((turn, position) => {
-    const turnIndex = Number.isFinite(turn?.turnIndex) ? turn.turnIndex : position;
-    for (const role of ['human', 'assistant']) {
-      const versions = turn?.[role]?.versions;
-      if (!Array.isArray(versions) || !versions.length) continue;
-      const current = versions.at(-1);
-      const version = Number.isFinite(current?.version) ? current.version : versions.length - 1;
-      selected.add(`${role}_${turnIndex}_v${version}`);
-    }
-  });
-  return selected;
+function canonicalVersionRank(message) {
+  const version = Number.isFinite(message.source._version) ? message.source._version : null;
+  const versionType = firstString(message.source._version_type) || (version === 0 ? 'normal' : null);
+  if (version === 0 && versionType === 'normal') return 2;
+  if (version === 0) return 1;
+  return 0;
 }
 
-function deriveBranches(messages, rawData) {
+function deriveBranches(messages) {
   const children = new Map();
   for (const message of messages) {
     if (!children.has(message.parentId)) children.set(message.parentId, []);
@@ -115,7 +107,6 @@ function deriveBranches(messages, rawData) {
   }
   for (const siblings of children.values()) siblings.sort((a, b) => a.order - b.order);
 
-  const selected = selectedVersionIds(rawData);
   const depths = new Map();
   const depth = message => {
     if (depths.has(message.id)) return depths.get(message.id);
@@ -126,10 +117,10 @@ function deriveBranches(messages, rawData) {
   };
   messages.forEach(depth);
   const chooseMain = siblings => [...siblings].sort((a, b) =>
-    Number(selected.has(b.id)) - Number(selected.has(a.id)) ||
+    canonicalVersionRank(b) - canonicalVersionRank(a) ||
     depth(b) - depth(a) ||
-    (Number.isFinite(b.source._version) ? b.source._version : -1) -
-      (Number.isFinite(a.source._version) ? a.source._version : -1) ||
+    (Number.isFinite(a.source._version) ? a.source._version : Number.MAX_SAFE_INTEGER) -
+      (Number.isFinite(b.source._version) ? b.source._version : Number.MAX_SAFE_INTEGER) ||
     a.order - b.order
   )[0];
 
@@ -160,11 +151,11 @@ function deriveBranches(messages, rawData) {
   return ids;
 }
 
-function branchIdsFor(messages, rawData) {
+function branchIdsFor(messages) {
   if (messages.length && messages.every(message => firstString(message.source.branch_id))) {
     return new Map(messages.map(message => [message.id, message.source.branch_id]));
   }
-  return deriveBranches(messages, rawData);
+  return deriveBranches(messages);
 }
 
 function branchRecords(messages, branchIds) {
@@ -333,7 +324,7 @@ export function geminiToArchiveRecord(processedData) {
   const provisional = legacyMessages(processedData, 'temporary');
   const id = conversationId(meta, rawData, platform, provisional);
   const messages = legacyMessages(processedData, id);
-  const branchIds = branchIdsFor(messages, rawData);
+  const branchIds = branchIdsFor(messages);
 
   return createConversationRecord({
     id,
