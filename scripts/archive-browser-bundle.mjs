@@ -99,7 +99,7 @@ function transformExports(source, moduleId) {
     return '';
   });
 
-  if (/\bexport\s/.test(transformed)) {
+  if (/^\s*export\s/m.test(transformed)) {
     throw new Error(`Unsupported export syntax remains in ${moduleId}`);
   }
 
