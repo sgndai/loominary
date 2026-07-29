@@ -41,7 +41,7 @@ function normalizeAttachments(attachments = [], messageId) {
         mimeType: firstString(item.file_type, item.mimeType),
         size: Number.isFinite(sizeValue) && sizeValue >= 0 ? sizeValue : 0,
         source: 'chatgpt',
-        location: firstString(item.link, item.url, item.download_url, item.href)
+        location: firstString(item.location, item.link, item.url, item.download_url, item.href)
       },
       [['metadata', Object.keys(metadata).length > 0 ? metadata : null]]
     );
