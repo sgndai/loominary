@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "loominary.conversation/v1",
+  "conversation": {
+    "id": "rich-conversation",
+    "title": "Rich archive fixture",
+    "platform": "chatgpt",
+    "provider": "openai",
+    "providerConversationId": "provider-rich",
+    "createdAt": "2026-07-29T00:00:00.000Z",
+    "updatedAt": "2026-07-29T01:00:00.000Z"
+  },
+  "branches": [
+    {
+      "id": "main",
+      "rootMessageId": "msg-1",
+      "leafMessageIds": ["msg-2"]
+    }
+  ],
+  "messages": [
+    {
+      "id": "msg-1",
+      "parentId": null,
+      "branchId": "main",
+      "role": "user",
+      "createdAt": "2026-07-29T00:00:00.000Z",
+      "text": "Search this topic",
+      "content": [
+        {"type": "text", "text": "Search this topic"}
+      ],
+      "attachments": [
+        {"id": "file-1", "name": "note.pdf", "mimeType": "application/pdf"}
+      ]
+    },
+    {
+      "id": "msg-2",
+      "parentId": "msg-1",
+      "branchId": "main",
+      "role": "assistant",
+      "createdAt": "2026-07-29T00:01:00.000Z",
+      "text": "Result",
+      "content": [
+        {"type": "text", "text": "Result"}
+      ],
+      "citations": [
+        {"type": "url", "url": "https://example.com", "sourceType": "web"}
+      ],
+      "thinking": "hidden reasoning block",
+      "toolCalls": [
+        {"name": "web_search", "input": {}, "result": {}}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Loominary Archive Model v1",
+  "type": "object",
+  "description": "Schema reference for provider-agnostic Loominary archive records.",
+  "properties": {
+    "schemaVersion": {
+      "const": "loominary.conversation/v1"
+    },
+    "conversation": {
+      "type": "object",
+      "required": ["id", "title", "platform"],
+      "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "platform": {"type": "string"},
+        "provider": {"type": "string"}
+      }
+    },
+    "branches": {
+      "type": "array"
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "role", "content"],
+        "properties": {
+          "id": {"type": "string"},
+          "role": {"type": "string"},
+          "text": {"type": "string"},
+          "content": {"type": "array"},
+          "attachments": {"type": "array"},
+          "citations": {"type": "array"},
+          "toolCalls": {"type": "array"}
+        }
+      }
+    }
+  },
+  "required": ["schemaVersion", "conversation", "branches", "messages"]
+}
