@@ -1,6 +1,7 @@
 name: Apply Stage 3A Build Migration
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - chore/stage-0-baseline
