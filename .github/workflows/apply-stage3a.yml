@@ -1,6 +1,9 @@
 name: Verify Stage 0 Build
 
 on:
+  push:
+    branches:
+      - chore/stage-0-baseline
   workflow_dispatch:
 
 permissions:
