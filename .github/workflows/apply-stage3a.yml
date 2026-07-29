@@ -1,9 +1,12 @@
-name: Verify Stage 0 Build
+name: Stage 0 CI
 
 on:
   push:
     branches:
-      - chore/stage-0-baseline
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -13,7 +16,7 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout branch
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Node 24
