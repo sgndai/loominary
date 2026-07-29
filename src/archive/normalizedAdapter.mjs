@@ -1,10 +1,10 @@
 import { validateConversationRecord } from '../../server/archive/contract.mjs';
 
 /**
- * Provider parser boundary for Archive Model v1.
+ * Shared constructor for Archive Model v1 conversation records.
  *
- * Existing parsers may continue returning their historical shape. Adapters convert
- * those results into the canonical conversation contract before persistence.
+ * Provider-specific adapters are responsible for translating their historical
+ * parser output into the fields accepted here.
  */
 
 function normalizeContent(text) {
@@ -16,57 +16,69 @@ function normalizeContent(text) {
   ];
 }
 
+function compactOptionalProperties(target, entries) {
+  for (const [key, value] of entries) {
+    if (value !== undefined) target[key] = value;
+  }
+  return target;
+}
+
 export function createConversationRecord({
   id,
   title,
   platform,
-  provider,
+  provider = null,
   providerConversationId = null,
+  createdAt = null,
+  updatedAt = null,
+  favorite,
+  metadata,
   messages = [],
   branches = []
 }) {
-  const record = {
-    schemaVersion: 'loominary.conversation/v1',
-    conversation: {
+  const conversation = compactOptionalProperties(
+    {
       id,
       title: title || 'Untitled conversation',
       platform,
       provider,
       providerConversationId,
-      createdAt: null,
-      updatedAt: null
+      createdAt,
+      updatedAt
     },
+    [
+      ['favorite', favorite],
+      ['metadata', metadata]
+    ]
+  );
+
+  const record = {
+    schemaVersion: 'loominary.conversation/v1',
+    conversation,
     branches,
-    messages: messages.map(message => ({
-      id: message.id,
-      parentId: message.parentId || null,
-      branchId: message.branchId || 'main',
-      role: message.role || 'unknown',
-      createdAt: message.createdAt || null,
-      text: message.text || '',
-      content: message.content || normalizeContent(message.text),
-      attachments: message.attachments || [],
-      citations: message.citations || [],
-      thinking: message.thinking || null,
-      toolCalls: message.toolCalls || []
-    }))
+    messages: messages.map(message =>
+      compactOptionalProperties(
+        {
+          id: message.id,
+          parentId: message.parentId || null,
+          branchId: message.branchId || 'main',
+          role: message.role || 'unknown',
+          createdAt: message.createdAt || null,
+          text: typeof message.text === 'string' ? message.text : '',
+          content:
+            Array.isArray(message.content) && message.content.length > 0
+              ? message.content
+              : normalizeContent(message.text),
+          attachments: Array.isArray(message.attachments) ? message.attachments : [],
+          citations: Array.isArray(message.citations) ? message.citations : [],
+          thinking: message.thinking ?? null,
+          toolCalls: Array.isArray(message.toolCalls) ? message.toolCalls : []
+        },
+        [['metadata', message.metadata]]
+      )
+    )
   };
 
   validateConversationRecord(record);
   return record;
 }
-
-export const providerAdapters = {
-  chatgpt: {
-    toArchiveRecord: createConversationRecord
-  },
-  claude: {
-    toArchiveRecord: createConversationRecord
-  },
-  gemini: {
-    toArchiveRecord: createConversationRecord
-  },
-  grok: {
-    toArchiveRecord: createConversationRecord
-  }
-};
