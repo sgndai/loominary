@@ -1,6 +1,6 @@
 {
-  "name": "Loominary",
-  "version": "26.03.0",
+  "name": "loominary",
+  "version": "26.3.1",
   "private": true,
   "homepage": ".",
   "description": "A handy tool for exporting chat conversations.",
@@ -27,20 +27,20 @@
     "remark-math": "^6.0.0"
   },
   "scripts": {
-    "start": "cross-env HOST=0.0.0.0 PORT=3789 PUBLIC_URL=/lyra-exporter react-scripts start",
+    "start": "cross-env HOST=0.0.0.0 PORT=3789 react-scripts start",
     "start:local": "cross-env PORT=3789 react-scripts start",
     "start:network": "cross-env HOST=0.0.0.0 PORT=3789 react-scripts start",
     "local-service": "node server/loominary-local-service.mjs",
+    "test": "npm run test:local-service",
     "test:local-service": "node --test tests/*.test.mjs",
     "build": "cross-env NODE_OPTIONS=--max-old-space-size=4096 react-scripts build",
     "postbuild": "node -e \"const fs=require('fs');fs.mkdirSync('build/welcome',{recursive:true});let h=fs.readFileSync('build/index.html','utf8');h=h.replace(/\\.\\//g,'../');fs.writeFileSync('build/welcome/index.html',h)\"",
-    "build:extension": "cross-env NODE_OPTIONS=--max-old-space-size=4096 react-scripts build",
+    "build:app": "npm run build",
+    "build:userscript": "node scripts/run-build.mjs userscript",
+    "build:extension": "node scripts/run-build.mjs extension",
+    "build:firefox": "node scripts/run-build.mjs firefox",
     "predeploy": "npm run build",
-    "deploy": "gh-pages -d build",
-    "deploy:pages": "gh-pages -d build -r https://github.com/Laumss/react.git",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "deploy": "gh-pages -d build"
   },
   "eslintConfig": {
     "extends": [
@@ -68,5 +68,10 @@
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
     "wait-on": "^8.0.3"
-  }
+  },
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=10 <12"
+  },
+  "packageManager": "npm@11.11.0"
 }
