@@ -9,8 +9,13 @@ const MIME_EXTENSIONS = new Map([
   ['image/gif', 'gif'],
   ['image/svg+xml', 'svg'],
   ['application/pdf', 'pdf'],
+  ['application/zip', 'zip'],
+  ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'docx'],
+  ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'xlsx'],
+  ['application/vnd.openxmlformats-officedocument.presentationml.presentation', 'pptx'],
   ['text/plain', 'txt'],
   ['text/markdown', 'md'],
+  ['text/html', 'html'],
   ['application/json', 'json'],
   ['text/csv', 'csv']
 ]);
@@ -22,7 +27,7 @@ const SHA256_K = new Uint32Array([
   0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
   0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
   0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4, 0x5b9cca4f, 0x682e6ff3,
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 ]);
 
@@ -244,33 +249,107 @@ function externalizeAttachments(record) {
   };
 }
 
+function finiteCount(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
+function buildIntegrity(assetReport, manifestFiles) {
+  const embeddedAttachments = manifestFiles.filter(file => file.embedded).length;
+  const externalAttachments = manifestFiles.length - embeddedAttachments;
+
+  if (!assetReport || typeof assetReport !== 'object') {
+    return {
+      status: 'not-checked',
+      expected: null,
+      downloaded: null,
+      failed: null,
+      archivedAttachments: manifestFiles.length,
+      embeddedAttachments,
+      externalAttachments,
+      failures: []
+    };
+  }
+
+  const expected = finiteCount(assetReport.expected);
+  const downloaded = finiteCount(assetReport.downloaded);
+  const failed = finiteCount(assetReport.failed, Math.max(0, expected - downloaded));
+  const complete = failed === 0 && downloaded === expected;
+
+  return {
+    status: complete ? 'complete' : 'partial',
+    expected,
+    downloaded,
+    failed,
+    archivedAttachments: manifestFiles.length,
+    embeddedAttachments,
+    externalAttachments,
+    failures: Array.isArray(assetReport.failures) ? assetReport.failures : []
+  };
+}
+
+function buildReadme(record, integrity) {
+  const title = record.conversation?.title || 'Untitled conversation';
+  const statusLabels = {
+    complete: '完整',
+    partial: '不完整',
+    'not-checked': '未检查'
+  };
+
+  const lines = [
+    '# Loominary 对话归档',
+    '',
+    `对话：${title}`,
+    '',
+    '## 文件说明',
+    '',
+    '- `conversation.md`：适合直接阅读的完整对话。',
+    '- `conversation.json`：结构化 Archive Model，供程序处理；附件二进制已移出 JSON。',
+    '- `manifest.json`：附件路径、哈希、来源链接和完整性报告。',
+    '- `attachments/images/`：归档图片。',
+    '- `attachments/files/`：归档文档及其他文件。',
+    '',
+    '## 附件完整性',
+    '',
+    `- 状态：${statusLabels[integrity.status] || integrity.status}`,
+    `- 发现附件：${integrity.expected ?? '未检查'}`,
+    `- 下载成功：${integrity.downloaded ?? '未检查'}`,
+    `- 下载失败：${integrity.failed ?? '未检查'}`,
+    `- 归档附件记录：${integrity.archivedAttachments}`,
+    `- 已写入 ZIP：${integrity.embeddedAttachments}`,
+    `- 仅保留外部引用：${integrity.externalAttachments}`
+  ];
+
+  if (integrity.failures.length) {
+    lines.push('', '## 下载失败', '');
+    for (const failure of integrity.failures) {
+      lines.push(`- ${failure.name || failure.fileId || '未知附件'}：${failure.reason || '未知错误'}`);
+    }
+  }
+
+  lines.push('');
+  return lines.join('\n');
+}
+
 export function exportConversationBundle(record, options = {}) {
   validateConversationRecord(record);
 
   const title = safeFileName(record.conversation?.title);
   const externalized = externalizeAttachments(record);
+  const integrity = buildIntegrity(options.assetReport, externalized.manifestFiles);
   const entries = {
-    'conversation.json': exportConversationJson(externalized.record),
+    'README.md': buildReadme(externalized.record, integrity),
     'conversation.md': exportConversationMarkdown(externalized.record),
-    'ai.md': exportConversationMarkdown(externalized.record, {
-      includeThinking: false,
-      includeToolCalls: false
-    })
+    'conversation.json': exportConversationJson(externalized.record)
   };
 
   Object.assign(entries, externalized.binaryEntries);
 
-  if (externalized.safeUrls.length) {
-    entries['attachments/sources/remote-urls.json'] = JSON.stringify({
-      schemaVersion: 'loominary.safe-urls/v1',
-      urls: externalized.safeUrls
-    }, null, 2);
-  }
-
   const manifest = {
-    schemaVersion: 'loominary.bundle/v1',
+    schemaVersion: 'loominary.bundle/v2',
     conversationId: record.conversation.id,
     createdAt: options.createdAt || null,
+    integrity,
     files: externalized.manifestFiles,
     safeUrls: externalized.safeUrls,
     exports: [...Object.keys(entries), 'manifest.json'].sort()
