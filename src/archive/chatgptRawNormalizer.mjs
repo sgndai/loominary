@@ -30,25 +30,42 @@ function messageText(message) {
 
 function normalizeAttachment(item, messageId, index) {
   if (!isObject(item)) return null;
-  const mimeType = firstString(item.mimeType, item.mime_type, item.file_type, item.format);
+
+  const mimeType = firstString(
+    item.mimeType,
+    item.mime_type,
+    item.file_type,
+    item.format,
+    item.media_type
+  );
   const data = firstString(item.data, item.base64);
+  const dataUri = data && mimeType ? `data:${mimeType};base64,${data}` : null;
   const location = firstString(
+    dataUri,
     item.location,
     item.url,
     item.download_url,
+    item.href,
     item.asset_pointer,
-    item.original_src,
-    data && mimeType ? `data:${mimeType};base64,${data}` : null
+    item.original_src
   );
-  const sizeValue = Number(item.size ?? item.file_size ?? 0);
+  const sizeValue = Number(item.size ?? item.size_bytes ?? item.file_size ?? 0);
+
   return {
     id: firstString(item.id, item.file_id, item.asset_pointer) || `${messageId}:attachment:${index + 1}`,
-    name: firstString(item.name, item.file_name) || `attachment-${index + 1}`,
+    name: firstString(item.name, item.file_name, item.filename) || `attachment-${index + 1}`,
     mimeType,
     size: Number.isFinite(sizeValue) && sizeValue >= 0 ? sizeValue : 0,
+    source: 'chatgpt',
     location,
-    original_src: firstString(item.original_src)
+    original_src: firstString(item.original_src, item.url, item.download_url)
   };
+}
+
+function attachmentKey(attachment) {
+  return [attachment.id, attachment.location, attachment.name, attachment.mimeType]
+    .filter(Boolean)
+    .join('|');
 }
 
 function collectAttachments(node, message, messageId) {
@@ -61,20 +78,35 @@ function collectAttachments(node, message, messageId) {
     : [];
   for (const part of parts) {
     if (isObject(part) && (
-      part.asset_pointer || part.file_id || part.url || part.location || part.content_type === 'image_asset_pointer'
+      part.asset_pointer ||
+      part.file_id ||
+      part.url ||
+      part.location ||
+      part.download_url ||
+      part.content_type === 'image_asset_pointer'
     )) {
       candidates.push(part);
     }
   }
 
-  const imageGroups = isObject(node?.loominary_images) ? node.loominary_images : {};
-  for (const values of Object.values(imageGroups)) {
-    if (Array.isArray(values)) candidates.push(...values);
+  for (const property of ['loominary_images', 'loominary_files', 'loominary_attachments']) {
+    const groups = isObject(node?.[property]) ? node[property] : {};
+    for (const values of Object.values(groups)) {
+      if (Array.isArray(values)) candidates.push(...values);
+    }
   }
 
-  return candidates
-    .map((item, index) => normalizeAttachment(item, messageId, index))
-    .filter(Boolean);
+  const seen = new Set();
+  const attachments = [];
+  for (let index = 0; index < candidates.length; index += 1) {
+    const attachment = normalizeAttachment(candidates[index], messageId, index);
+    if (!attachment) continue;
+    const key = attachmentKey(attachment);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    attachments.push(attachment);
+  }
+  return attachments;
 }
 
 function collectCitations(message) {
