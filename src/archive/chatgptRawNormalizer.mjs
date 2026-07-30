@@ -28,6 +28,14 @@ function messageText(message) {
   return firstString(content.text, message?.text) || '';
 }
 
+function fileIdFromPointer(value) {
+  if (typeof value !== 'string' || !value) return null;
+  const decoded = value.replace(/^file-service:\/\//, '').replace(/^sediment:\/\//, '');
+  const segments = decoded.split('#');
+  return segments.find(segment => /^file[-_][A-Za-z0-9_-]+$/.test(segment)) ||
+    (/^file[-_][A-Za-z0-9_-]+$/.test(decoded) ? decoded : null);
+}
+
 function normalizeAttachment(item, messageId, index) {
   if (!isObject(item)) return null;
 
@@ -50,22 +58,52 @@ function normalizeAttachment(item, messageId, index) {
     item.original_src
   );
   const sizeValue = Number(item.size ?? item.size_bytes ?? item.file_size ?? 0);
+  const fileId = firstString(
+    item.file_id,
+    item.library_file_id,
+    fileIdFromPointer(item.asset_pointer),
+    fileIdFromPointer(item.id),
+    item.id,
+    item.asset_pointer
+  );
 
   return {
-    id: firstString(item.id, item.file_id, item.asset_pointer) || `${messageId}:attachment:${index + 1}`,
+    id: fileId || `${messageId}:attachment:${index + 1}`,
     name: firstString(item.name, item.file_name, item.filename) || `attachment-${index + 1}`,
     mimeType,
     size: Number.isFinite(sizeValue) && sizeValue >= 0 ? sizeValue : 0,
-    source: 'chatgpt',
+    source: firstString(item.source) || 'chatgpt',
     location,
     original_src: firstString(item.original_src, item.url, item.download_url)
   };
 }
 
-function attachmentKey(attachment) {
-  return [attachment.id, attachment.location, attachment.name, attachment.mimeType]
-    .filter(Boolean)
-    .join('|');
+function isEmbeddedAttachment(attachment) {
+  return typeof attachment?.location === 'string' && attachment.location.startsWith('data:');
+}
+
+function mergeAttachment(existing, incoming) {
+  const incomingWins = isEmbeddedAttachment(incoming) && !isEmbeddedAttachment(existing);
+  const primary = incomingWins ? incoming : existing;
+  const secondary = incomingWins ? existing : incoming;
+
+  return {
+    ...secondary,
+    ...primary,
+    name: primary.name && !primary.name.startsWith('attachment-')
+      ? primary.name
+      : secondary.name || primary.name,
+    mimeType: primary.mimeType || secondary.mimeType,
+    size: primary.size || secondary.size || 0,
+    original_src: primary.original_src || secondary.original_src || null
+  };
+}
+
+function attachmentIdentity(attachment) {
+  if (attachment.id) return `id:${attachment.id}`;
+  if (attachment.original_src) return `src:${attachment.original_src}`;
+  if (attachment.location) return `location:${attachment.location}`;
+  return `name:${attachment.name}|${attachment.mimeType || ''}`;
 }
 
 function collectAttachments(node, message, messageId) {
@@ -96,14 +134,20 @@ function collectAttachments(node, message, messageId) {
     }
   }
 
-  const seen = new Set();
+  const indexByIdentity = new Map();
   const attachments = [];
   for (let index = 0; index < candidates.length; index += 1) {
     const attachment = normalizeAttachment(candidates[index], messageId, index);
     if (!attachment) continue;
-    const key = attachmentKey(attachment);
-    if (seen.has(key)) continue;
-    seen.add(key);
+
+    const identity = attachmentIdentity(attachment);
+    const existingIndex = indexByIdentity.get(identity);
+    if (existingIndex !== undefined) {
+      attachments[existingIndex] = mergeAttachment(attachments[existingIndex], attachment);
+      continue;
+    }
+
+    indexByIdentity.set(identity, attachments.length);
     attachments.push(attachment);
   }
   return attachments;
