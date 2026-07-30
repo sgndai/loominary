@@ -1,26 +1,35 @@
 import { adaptProviderConversation } from './adapterRegistry.mjs';
+import { collectCurrentChatgptArchiveInput } from './chatgptBrowserCollector.mjs';
 import { normalizeChatgptRawConversation } from './chatgptRawNormalizer.mjs';
 import { exportConversationZipBundle } from './exporters/zipBundleExporter.mjs';
 
+function unwrapBrowserInput(input) {
+  if (input?.rawConversation && typeof input.rawConversation === 'object') {
+    return input.rawConversation;
+  }
+  return input;
+}
+
 function normalizeBrowserInput(input) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+  const source = unwrapBrowserInput(input);
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
     throw new TypeError('Conversation export input must be an object');
   }
 
-  if (input.mapping && typeof input.mapping === 'object') {
-    return normalizeChatgptRawConversation(input);
+  if (Array.isArray(source.chat_history) && source.format) {
+    return source;
   }
 
-  if (Array.isArray(input.chat_history) && input.format) {
-    return input;
+  if (source.mapping && typeof source.mapping === 'object') {
+    return normalizeChatgptRawConversation(source);
   }
 
   if (typeof _parseRaw === 'function') {
-    const parsed = _parseRaw(input);
+    const parsed = _parseRaw(source);
     if (parsed) return parsed;
   }
 
-  return input;
+  return source;
 }
 
 export function createBrowserArchiveRecord(input) {
@@ -28,8 +37,20 @@ export function createBrowserArchiveRecord(input) {
 }
 
 export function exportBrowserArchiveBundle(input, options = {}) {
-  const record = createBrowserArchiveRecord(input);
-  return exportConversationZipBundle(record, options);
+  const source = unwrapBrowserInput(input);
+  const record = createBrowserArchiveRecord(source);
+  const assetReport = input?.assetReport || source?.loominary_asset_report || options.assetReport || null;
+  return exportConversationZipBundle(record, {
+    ...options,
+    assetReport
+  });
+}
+
+export async function collectBrowserArchiveInput(platform, options = {}) {
+  if (platform === 'chatgpt') {
+    return collectCurrentChatgptArchiveInput(options);
+  }
+  throw new Error(`Browser Archive collection is not implemented for ${platform || 'unknown'}`);
 }
 
 const browserGlobal = typeof unsafeWindow !== 'undefined'
@@ -40,3 +61,4 @@ const browserGlobal = typeof unsafeWindow !== 'undefined'
 
 browserGlobal.LoominaryArchiveCreateRecord = createBrowserArchiveRecord;
 browserGlobal.LoominaryArchiveBundle = exportBrowserArchiveBundle;
+browserGlobal.LoominaryArchiveCollectCurrent = collectBrowserArchiveInput;
