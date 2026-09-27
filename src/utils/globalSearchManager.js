@@ -10,6 +10,8 @@ export class GlobalSearchManager {
     this.messageIndex = new Map();
     this.fileData = new Map();
     this.fileCache = new Map(); // 文件内容的缓存 { fileName: { lastModified: timestamp, data: parsedData } }
+    this.searchCache = new Map();
+    this.buildGeneration = 0;
   }
 
   /**
@@ -20,12 +22,9 @@ export class GlobalSearchManager {
    * @param {Object} customNames - 用户自定义名称映射 {uuid: customName}
    */
   async buildGlobalIndex(files, processedData, currentFileIndex, customNames = {}) {
-    this.customNames = customNames;  // 保存以便后续使用
+    const buildGeneration = ++this.buildGeneration;
     const startTime = Date.now();
-    
-    // 如果文件列表发生巨大变化，或者强制重建，则清除旧索引
-    // 但为了性能，我们尽量增量更新或重用缓存
-    this.messageIndex.clear();
+    const nextMessageIndex = new Map();
     const newFileData = new Map();
     
     for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
@@ -87,13 +86,20 @@ export class GlobalSearchManager {
       
       // 处理不同格式的数据
       if (data.format === 'claude_full_export') {
-        this.indexFullExportData(data, file, fileIndex);
+        this.indexFullExportData(data, file, fileIndex, nextMessageIndex, customNames);
       } else if (data.chat_history) {
-        this.indexSimpleData(data, file, fileIndex);
+        this.indexSimpleData(data, file, fileIndex, nextMessageIndex, customNames);
       }
     }
-    
+
+    if (buildGeneration !== this.buildGeneration) {
+      return this.messageIndex;
+    }
+
+    this.customNames = customNames;
+    this.messageIndex = nextMessageIndex;
     this.fileData = newFileData;
+    this.searchCache.clear();
     console.log(`[GlobalSearch] 索引构建完成: ${this.messageIndex.size} 条消息, 来自 ${files.length} 个文件, 耗时 ${Date.now() - startTime}ms`);
     return this.messageIndex;
   }
@@ -101,14 +107,14 @@ export class GlobalSearchManager {
   /**
    * 索引完整导出格式的数据
    */
-  indexFullExportData(data, file, fileIndex) {
+  indexFullExportData(data, file, fileIndex, targetIndex = this.messageIndex, customNames = this.customNames || {}) {
     const conversations = data.views?.conversationList || [];
     
     conversations.forEach(conv => {
       const convUuid = generateConversationCardUuid(fileIndex, conv.uuid, file);
       
       // 优先使用用户自定义名称
-      const displayName = this.customNames[conv.uuid] || this.customNames[convUuid] || conv.name || '未命名对话';
+      const displayName = customNames[conv.uuid] || customNames[convUuid] || conv.name || '未命名对话';
       
       // 获取该对话的所有消息
       const convMessages = data.chat_history?.filter(msg => 
@@ -118,7 +124,7 @@ export class GlobalSearchManager {
       convMessages.forEach((msg, msgIndex) => {
         const messageId = `${convUuid}_${msg.uuid}`;
         
-        this.messageIndex.set(messageId, {
+        targetIndex.set(messageId, {
           // 文件和对话信息
           fileId: file.name,
           fileName: file.name,
@@ -159,19 +165,19 @@ export class GlobalSearchManager {
   /**
    * 索引简单格式的数据
    */
-  indexSimpleData(data, file, fileIndex) {
+  indexSimpleData(data, file, fileIndex, targetIndex = this.messageIndex, customNames = this.customNames || {}) {
     const fileUuid = generateFileCardUuid(fileIndex, file);
     const messages = data.chat_history || [];
     
     // 对于单个对话文件，使用 meta_info.uuid 或 fileUuid 作为对话 ID
     const conversationId = data.meta_info?.uuid || fileUuid;
     const originalTitle = data.meta_info?.title || file.name.replace('.json', '');
-    const displayName = this.customNames[conversationId] || this.customNames[fileUuid] || originalTitle;
+    const displayName = customNames[conversationId] || customNames[fileUuid] || originalTitle;
     
     messages.forEach((msg, msgIndex) => {
       const messageId = `${fileUuid}_${msg.uuid || msgIndex}`;
       
-      this.messageIndex.set(messageId, {
+      targetIndex.set(messageId, {
         fileId: file.name,
         fileName: file.name,
         fileIndex,
