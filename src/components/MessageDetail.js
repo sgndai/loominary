@@ -762,7 +762,7 @@ const MessageDetail = ({
               </MarkdownErrorBoundary>
             </div>
 
-            {renderTools(currentMessage.tools)}
+            {!contentOnly && renderTools(currentMessage.tools)}
             {renderCitations(currentMessage.citations)}
           </div>
         );
