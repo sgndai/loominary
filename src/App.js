@@ -720,7 +720,6 @@ function App() {
 
   const {
     files,
-    currentFile,
     currentFileIndex,
     processedData,
     isLoading: isFileLoading,
@@ -1345,7 +1344,7 @@ function App() {
     } catch (e) {
       console.error('[Loominary] Error loading conversation:', e);
     }
-  }, [switchToTimeline, files, sortedBrowseCards]);
+  }, [switchToTimeline, sortedBrowseCards]);
 
   const handleBrowseAllExport = useCallback(async () => {
     const ctx = browseAllContextRef.current || {};
