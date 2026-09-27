@@ -850,6 +850,7 @@ function App() {
 
   // 搜索状态
   const [searchQuery, setSearchQuery] = useState('');
+  const [pendingMessageNavigation, setPendingMessageNavigation] = useState(null);
   const searchResults = { results: [], filteredMessages: [] }; // 搜索已迁移到 SearchOverlay
 
   // 管理器实例引用
@@ -1057,59 +1058,61 @@ function App() {
   // ==================== 事件处理函数 ====================
 
   const handleNavigateToMessage = useCallback((navigationData) => {
-    const { fileIndex, conversationUuid, messageIndex, messageId, messageUuid, highlight } = navigationData;
+    const { fileIndex, conversationUuid } = navigationData;
+    const targetFileIndex = Number.isInteger(fileIndex) ? fileIndex : currentFileIndex;
+    const needFileSwitch = targetFileIndex !== currentFileIndex;
 
-    const needFileSwitch = fileIndex !== currentFileIndex;
-
-    // 切换到时间线视图（pushState 确保返回手势回到 conversations）
-    switchToTimeline(fileIndex, conversationUuid);
-
-    // 切换文件（如果需要）
-    if (needFileSwitch) {
-      fileActions.switchFile(fileIndex);
-    }
-
-    // 设置对话UUID
-    if (conversationUuid) {
-      // 如果是完整导出格式，需要提取真实的对话UUID
-      let realConversationUuid = conversationUuid;
-      if (conversationUuid.startsWith('file-')) {
-        // 从 file-xxx_uuid 格式中提取UUID
-        const parts = conversationUuid.split('_');
-        if (parts.length > 1) {
-          realConversationUuid = parts.slice(1).join('_');
-        }
+    let targetConversationUuid = conversationUuid || null;
+    if (targetConversationUuid?.startsWith('file-')) {
+      const parts = targetConversationUuid.split('_');
+      if (parts.length > 1) {
+        targetConversationUuid = parts.slice(1).join('_');
       }
-      setSelectedConversationUuid(realConversationUuid);
     }
 
-    // 通知ConversationTimeline滚动到消息，传递messageId和messageUuid
-    // 根据不同情况设置不同延迟
-    let delay;
-    if (needFileSwitch && fileIndex !== currentFileIndex) {
-      // 需要切换文件并加载数据，需要更长延迟
-      delay = 1000;
-    } else if (needFileSwitch || conversationUuid !== selectedConversationUuid) {
-      // 只是切换视图或对话
-      delay = 600;
-    } else {
-      // 同一对话内导航
-      delay = 300;
+    switchToTimeline(targetFileIndex, conversationUuid || null);
+
+    if (needFileSwitch) {
+      fileActions.switchFile(targetFileIndex);
     }
 
-    setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('scrollToMessage', {
-        detail: {
-          messageIndex,
-          messageId,
-          messageUuid,
-          highlight,
-          fileIndex,  // 添加文件索引
-          conversationUuid  // 添加对话UUID
-        }
-      }));
-    }, delay);
-  }, [currentFileIndex, selectedConversationUuid, switchToTimeline, setSelectedConversationUuid, fileActions]);
+    if (targetConversationUuid) {
+      setSelectedConversationUuid(targetConversationUuid);
+    }
+
+    // Navigation is completed by state observation below. No guessed delay is
+    // needed: the event is dispatched only when the requested file has actually
+    // produced processedData and the requested conversation state is active.
+    setPendingMessageNavigation({
+      ...navigationData,
+      fileIndex: targetFileIndex,
+      targetConversationUuid
+    });
+  }, [currentFileIndex, switchToTimeline, fileActions]);
+
+  useEffect(() => {
+    if (!pendingMessageNavigation) return;
+    if (viewMode !== 'timeline' && viewMode !== 'whiteboard') return;
+    if (currentFileIndex !== pendingMessageNavigation.fileIndex) return;
+    if (!processedData) return;
+
+    const targetConversationUuid = pendingMessageNavigation.targetConversationUuid;
+    if (targetConversationUuid && selectedConversationUuid !== targetConversationUuid) return;
+
+    const {
+      targetConversationUuid: _targetConversationUuid,
+      ...detail
+    } = pendingMessageNavigation;
+
+    window.dispatchEvent(new CustomEvent('scrollToMessage', { detail }));
+    setPendingMessageNavigation(null);
+  }, [
+    pendingMessageNavigation,
+    viewMode,
+    currentFileIndex,
+    processedData,
+    selectedConversationUuid
+  ]);
 
 
   const handleOpenSingleJson = useCallback(() => {
