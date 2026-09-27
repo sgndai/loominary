@@ -575,7 +575,7 @@ def injected_script() -> str:
 """
 
 
-def build_extension(platform: str | None = None) -> Path:
+def build_extension(platform: str | None = None, build_dir: Path | None = None) -> Path:
     version = read_package_version()
     platforms = selected_platforms(platform)
     print(f"[Extension] Building platforms: {', '.join(platforms)}")
@@ -638,18 +638,24 @@ def build_extension(platform: str | None = None) -> Path:
         raise BuildError("Missing public/favicon.png and public/logo1024.png")
     shutil.copy2(icon_source, CHROME_DIR / "icons/icon.png")
 
-    build_dir = build_react_pages()
+    if build_dir is None:
+        build_dir = build_react_pages()
     shutil.copytree(build_dir, CHROME_DIR / "app")
     print(f"[Extension] {CHROME_DIR.relative_to(ROOT)}/ ready")
     return CHROME_DIR
 
 
-def build_firefox(platform: str | None = None) -> Path:
+def build_firefox(
+    platform: str | None = None,
+    chrome_dir: Path | None = None,
+    build_dir: Path | None = None,
+) -> Path:
     version = read_package_version()
-    build_extension(platform)
+    if chrome_dir is None:
+        chrome_dir = build_extension(platform, build_dir=build_dir)
     if FIREFOX_DIR.exists():
         shutil.rmtree(FIREFOX_DIR)
-    shutil.copytree(CHROME_DIR, FIREFOX_DIR)
+    shutil.copytree(chrome_dir, FIREFOX_DIR)
 
     manifest_path = FIREFOX_DIR / "manifest.json"
     manifest = json.loads(read_text(manifest_path))
@@ -784,7 +790,9 @@ def main() -> int:
             build_firefox(args.platform)
         elif command == "all":
             run_checks()
-            build_extension()
+            build_dir = build_react_pages()
+            chrome_dir = build_extension(build_dir=build_dir)
+            build_firefox(chrome_dir=chrome_dir)
             build_userscript()
         else:
             parser.error(f"Unknown command: {command}")
