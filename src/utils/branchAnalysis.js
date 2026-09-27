@@ -178,6 +178,32 @@ export function filterDisplayMessages(messages, branchFilters, branchAnalysis, s
 }
 
 /**
+ * 返回当前可见消息对应的“版本”信息。
+ * 分支点的直接子消息就是用户编辑版或助手重试版；只有这些消息显示 x/y 控件。
+ */
+export function getMessageVersionInfo(message, branchAnalysis, branchFilters = new Map()) {
+  if (!message || !branchAnalysis?.branchPoints) return null;
+
+  for (const [branchPointUuid, branchData] of branchAnalysis.branchPoints.entries()) {
+    const versionIndex = branchData.branches.findIndex(branch =>
+      branch.startMessage?.uuid === message.uuid
+    );
+    if (versionIndex < 0) continue;
+
+    const selectedIndex = branchFilters.get(branchPointUuid) ?? branchData.currentBranchIndex ?? 0;
+    return {
+      branchPointUuid,
+      versionIndex,
+      selectedIndex,
+      total: branchData.branches.length,
+      isSelected: versionIndex === selectedIndex
+    };
+  }
+
+  return null;
+}
+
+/**
  * 通过 uuid / messageId / index 在消息列表中定位一条消息
  * @param {Array} messages
  * @param {{ messageUuid, messageId, messageIndex, fileIndex, conversationUuid }} locator
