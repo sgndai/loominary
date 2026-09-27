@@ -4,6 +4,10 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import ReactDOM from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import rehypeRaw from 'rehype-raw';
+import 'katex/dist/katex.min.css';
 import MessageDetail from './MessageDetail';
 import PlatformIcon, { inferJsonlModelKey } from './PlatformIcon';
 import { PlatformUtils, DateTimeUtils } from '../utils/fileParser';
@@ -27,27 +31,7 @@ function useIsMobile(breakpoint = MOBILE_BREAKPOINT) {
   return isMobile;
 }
 
-// 时间线预览卡片的 Markdown 渲染配置（模块级常量，避免每次渲染重新创建）
-const TIMELINE_MD_COMPONENTS = {
-  p: ({ children }) => <span>{children}</span>,
-  h1: ({ children }) => <strong>{children}</strong>,
-  h2: ({ children }) => <strong>{children}</strong>,
-  h3: ({ children }) => <strong>{children}</strong>,
-  h4: ({ children }) => <strong>{children}</strong>,
-  h5: ({ children }) => <strong>{children}</strong>,
-  h6: ({ children }) => <strong>{children}</strong>,
-  strong: ({ children }) => <strong>{children}</strong>,
-  em: ({ children }) => <em>{children}</em>,
-  code: ({ inline, children }) => inline ?
-    <code className="inline-code">{children}</code> :
-    <code>{children}</code>,
-  pre: ({ children }) => <span>{children}</span>,
-  blockquote: ({ children }) => <span>" {children} "</span>,
-  a: ({ children }) => <span>{children}</span>,
-  ul: ({ children }) => <span>{children}</span>,
-  ol: ({ children }) => <span>{children}</span>,
-  li: ({ children }) => <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '0.25em' }}><span>•</span><span>{children}</span></span>
-};
+// Timeline messages use the same Markdown/LaTeX stack as the detail view.
 
 // ==================== 重命名对话框组件 ====================
 const RenameDialog = ({
@@ -1167,8 +1151,8 @@ const ConversationTimeline = ({
 
                       <div className="timeline-body">
                         <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          components={TIMELINE_MD_COMPONENTS}
+                          remarkPlugins={[remarkGfm, remarkMath]}
+                          rehypePlugins={[rehypeKatex, rehypeRaw]}
                         >
                           {msg.display_text || ''}
                         </ReactMarkdown>
