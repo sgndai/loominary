@@ -1,4 +1,4 @@
-name: Stage 0 CI
+name: Loominary CI
 
 on:
   push:
@@ -33,12 +33,32 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Validate build pipeline
-        run: |
-          python build.py check
-          npm run test
-          npm run test:frontend
-          CI=false npm run build
-          npm run build:userscript
-          npm run build:extension
-          npm run build:firefox
+      - name: Run local-service and archive tests
+        run: npm run test
+
+      - name: Run frontend regression tests
+        run: npm run test:frontend
+
+      - name: Build all release artifacts once
+        run: npm run build:all
+
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ./build
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
