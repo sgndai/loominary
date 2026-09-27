@@ -1,7 +1,11 @@
 import React, { useEffect } from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { useFileManager } from '../App';
+
+jest.mock('react-markdown', () => () => null);
+jest.mock('remark-gfm', () => () => null);
+
+const { useFileManager } = require('../App');
 
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
