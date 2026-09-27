@@ -700,17 +700,26 @@ const MessageDetail = ({
       return null;
     }
 
+    const citationHost = (url) => {
+      if (!url) return t('messageDetail.citations.unknownWebsite');
+      try {
+        return new URL(url).hostname || t('messageDetail.citations.unknownWebsite');
+      } catch (_) {
+        return String(url);
+      }
+    };
+
     return (
       <div className="citations">
-        <h4>引用来源</h4>
+        <h4>{t('messageDetail.citations.title')}</h4>
         <div className="citation-list">
           {citations.map((citation, index) => (
             <div key={index} className="citation-item">
               <a href={citation.url || '#'} target="_blank" rel="noopener noreferrer">
-                {citation.title || '未知来源'}
+                {citation.title || t('messageDetail.citations.unknownSource')}
               </a>
               <span className="citation-source">
-                {citation.url ? new URL(citation.url).hostname : '未知网站'}
+                {citationHost(citation.url)}
               </span>
             </div>
           ))}
