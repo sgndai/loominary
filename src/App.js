@@ -730,7 +730,6 @@ function App() {
   const [showSearchOverlay, setShowSearchOverlay] = useState(false);
   const [searchOverlayQuery, setSearchOverlayQuery] = useState('');
   const [viewMode, setViewMode] = useState('conversations');
-  const [selectedFileIndex, setSelectedFileIndex] = useState(null);
   const [selectedConversationUuid, setSelectedConversationUuid] = useState(null);
   const [operatedFiles, setOperatedFiles] = useState(new Set());
   const [, setError] = useState(null); // eslint-disable-line no-unused-vars
@@ -847,8 +846,8 @@ function App() {
 
   // UUID管理
   const currentFileUuid = useMemo(() => {
-    return getCurrentFileUuid(viewMode, selectedFileIndex, selectedConversationUuid, processedData, files);
-  }, [viewMode, selectedFileIndex, selectedConversationUuid, processedData, files]);
+    return getCurrentFileUuid(viewMode, currentFileIndex, selectedConversationUuid, processedData, files);
+  }, [viewMode, currentFileIndex, selectedConversationUuid, processedData, files]);
 
   useEffect(() => {
     if (currentFileUuid) {
@@ -983,12 +982,11 @@ function App() {
       if (!state || state.view === 'conversations') {
         setViewMode('conversations');
         setSelectedConversationUuid(null);
-        setSelectedFileIndex(null);
         setSearchQuery('');
         setTimelineDisplayMessages([]);
       } else if (state.view === 'timeline') {
+        if (Number.isInteger(state.fileIndex)) fileActionsRef.current.switchFile(state.fileIndex);
         setViewMode(state.view);
-        setSelectedFileIndex(state.fileIndex);
         setSelectedConversationUuid(state.convUuid);
       }
     };
@@ -1000,8 +998,8 @@ function App() {
   // ==================== 数据计算 - 使用DataProcessor简化 ====================
 
   const timelineMessages = useMemo(() =>
-    DataProcessor.getTimelineMessages(viewMode, selectedFileIndex, currentFileIndex, processedData, selectedConversationUuid),
-    [viewMode, processedData, selectedConversationUuid, selectedFileIndex, currentFileIndex]
+    DataProcessor.getTimelineMessages(viewMode, processedData),
+    [viewMode, processedData]
   );
 
   const displayedItems = useMemo(() => {
@@ -1020,8 +1018,6 @@ function App() {
   const currentConversation = useMemo(() => {
     const conv = DataProcessor.getCurrentConversation({
       viewMode,
-      selectedFileIndex,
-      selectedConversationUuid,
       processedData,
       files,
       currentFileIndex,
@@ -1036,28 +1032,21 @@ function App() {
       return { ...conv, uuid: cardUuid, name: displayName };
     }
     return conv;
-  }, [viewMode, selectedFileIndex, selectedConversationUuid, processedData, files, currentFileIndex, fileMetadata, renameVersion, hasZipData]);
+  }, [viewMode, processedData, files, currentFileIndex, fileMetadata, renameVersion, hasZipData]);
 
   // ==================== 事件处理函数 ====================
 
   const handleNavigateToMessage = useCallback((navigationData) => {
     const { fileIndex, conversationUuid, messageIndex, messageId, messageUuid, highlight } = navigationData;
 
-    // 记录当前文件索引，用于判断是否需要切换文件
-    const needFileSwitch = fileIndex !== selectedFileIndex || fileIndex !== currentFileIndex;
+    const needFileSwitch = fileIndex !== currentFileIndex;
 
     // 切换到时间线视图（pushState 确保返回手势回到 conversations）
     switchToTimeline(fileIndex, conversationUuid);
 
     // 切换文件（如果需要）
     if (needFileSwitch) {
-      // 先切换当前文件
-      if (fileIndex !== currentFileIndex) {
-        fileActions.switchFile(fileIndex);
-      }
-      setSelectedFileIndex(fileIndex);
-    } else if (selectedFileIndex !== fileIndex) {
-      setSelectedFileIndex(fileIndex);
+      fileActions.switchFile(fileIndex);
     }
 
     // 设置对话UUID
@@ -1100,7 +1089,7 @@ function App() {
         }
       }));
     }, delay);
-  }, [selectedFileIndex, currentFileIndex, selectedConversationUuid, switchToTimeline, setSelectedFileIndex, setSelectedConversationUuid, fileActions]);
+  }, [currentFileIndex, selectedConversationUuid, switchToTimeline, setSelectedConversationUuid, fileActions]);
 
 
   // 当卡片点击加载新文件后，files 数组更新时自动选中新文件
@@ -1109,7 +1098,6 @@ function App() {
       const idx = pendingSelectIndexRef.current;
       pendingSelectIndexRef.current = null;
       fileActions.switchFile(idx);
-      setSelectedFileIndex(idx);
     }
   }, [files, fileActions]);
 
@@ -1213,10 +1201,10 @@ function App() {
     if (markManagerRef.current) {
       markManagerRef.current.toggleMark(messageIndex, markType);
 
-      if (viewMode === 'timeline' && selectedFileIndex !== null) {
-        const file = files[selectedFileIndex];
+      if (viewMode === 'timeline') {
+        const file = files[currentFileIndex];
         if (file) {
-          const fileUuid = generateFileCardUuid(selectedFileIndex, file);
+          const fileUuid = generateFileCardUuid(currentFileIndex, file);
 
           setOperatedFiles(prev => new Set(prev).add(fileUuid));
         }
@@ -1316,7 +1304,6 @@ function App() {
         const existingIdx = cardFileIndexMapRef.current.get(item.uuid);
         dataLoadedRef.current = false;
         fileActionsRef.current.switchFile(existingIdx);
-        setSelectedFileIndex(existingIdx);
         setSelectedConversationUuid(null);
         const cardIdx = sortedBrowseCards.findIndex(c => c.uuid === item.uuid);
         if (cardIdx !== -1) setBrowseAllCurrentIndex(cardIdx);
@@ -2149,7 +2136,6 @@ function App() {
       console.log('[Loominary] Files loaded in extension mode, switching to timeline view');
       switchToTimeline(0, null);
       fileActions.switchFile(0);
-      setSelectedFileIndex(0);
     }
   }, [isExtension, files, viewMode, fileActions, browseAllCards.length]);
 
@@ -2342,7 +2328,6 @@ function App() {
                   if (card) handleCardSelect(card);
                 } : (index) => {
                   fileActions.switchFile(index);
-                  setSelectedFileIndex(index);
                   setSelectedConversationUuid(null);
                 }}
                 searchQuery={searchQuery}
