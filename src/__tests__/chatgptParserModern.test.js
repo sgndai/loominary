@@ -151,7 +151,8 @@ describe('modern ChatGPT reader projection', () => {
         }),
         empty: assistantMessage('empty', 'tool-call', ['redacted'], {
           text: '',
-          endTurn: false
+          endTurn: false,
+          metadata: { attachments: [] }
         }),
         redacted: assistantMessage('redacted', 'empty', ['final'], {
           text: 'The output of this plugin was redacted.',
