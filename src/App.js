@@ -27,6 +27,7 @@ import { getRenameManager } from './utils/data/renameManager.js';
 import { prepareMarkdownExport, downloadMarkdownExport } from './utils/markdownExporter';
 import { pdfExportManager } from './utils/export/pdfExportManager';
 import { useI18n, setResolvedLang } from './index.js';
+import { getViewerBridgeContext, isViewerBridgeEvent, postViewerReady } from './utils/viewerBridge.js';
 
 
 // ==================== 筛选 Hook ====================
@@ -1928,70 +1929,72 @@ function App() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Userscript 模式：监听 postMessage（静态 React App 作为 Viewer）
+  // Userscript 模式：只接受由 URL fragment 绑定的 opener/origin/session。
   useEffect(() => {
     if (isExtension) return;
+
+    const bridgeContext = getViewerBridgeContext();
+    if (!bridgeContext) return;
+
+    const savedConfig = StorageManager.get('export-config', {});
+    postViewerReady(bridgeContext, savedConfig);
 
     const handleMessage = async (event) => {
       const { data } = event;
       if (!data || typeof data !== 'object') return;
+      if (data.type !== 'LOOMINARY_LOAD_DATA') return;
+      if (!isViewerBridgeEvent(event, bridgeContext)) return;
 
-      // 响应握手：告知 Userscript 页面已就绪，同时附带保存的导出配置（供 userscript 同步）
-      if (data.type === 'LOOMINARY_HANDSHAKE') {
-        const savedConfig = StorageManager.get('export-config', {});
-        event.source?.postMessage({ type: 'LOOMINARY_READY', config: savedConfig }, event.origin);
-        return;
-      }
+      dataLoadedRef.current = true;
 
-      // 接收数据
-      if (data.type === 'LOOMINARY_LOAD_DATA') {
-        // Always process — allow tab reuse (don't guard with dataLoadedRef)
-        dataLoadedRef.current = true;
+      const payload = data.data;
+      if (!payload) return;
 
-        const payload = data.data;
-        if (!payload) return;
+      // Viewer appearance and language are persistent viewer preferences.
+      // The source page only supplies conversation/export data.
+      setBrowseAllCardsRef.current([]);
+      setBrowseAllCurrentIndexRef.current(null);
 
-        // Apply lang and theme from payload
-        if (payload.lang) setResolvedLang(payload.lang);
-        if (payload.theme) {
-          document.documentElement.setAttribute('data-theme', payload.theme);
-          StorageManager.set('app-theme', payload.theme);
-        }
-
-        // Reset previously loaded state so new data replaces old
-        setBrowseAllCardsRef.current([]);
-        setBrowseAllCurrentIndexRef.current(null);
-
-        try {
-          if (payload.files && Array.isArray(payload.files)) {
-            // 多文件（ST 分支模式）
-            const fileObjs = payload.files.map(({ content, filename }) => {
-              const blob = new Blob([typeof content === 'string' ? content : JSON.stringify(content)], { type: 'application/jsonl' });
-              return new File([blob], filename, { type: 'application/jsonl', lastModified: Date.now() });
+      try {
+        if (payload.files && Array.isArray(payload.files)) {
+          const fileObjs = payload.files.map(({ content, filename }) => {
+            const blob = new Blob(
+              [typeof content === 'string' ? content : JSON.stringify(content)],
+              { type: 'application/jsonl' }
+            );
+            return new File([blob], filename, {
+              type: 'application/jsonl',
+              lastModified: Date.now()
             });
-            await fileActionsRef.current.loadMergedJSONLFiles(fileObjs);
-          } else {
-            // 单文件
-            const { content, filename } = payload;
-            const jsonData = typeof content === 'string' ? content : JSON.stringify(content);
-            const blob = new Blob([jsonData], { type: 'application/json' });
-            const file = new File([blob], filename, { type: 'application/json', lastModified: Date.now() });
-            const result = await fileActionsRef.current.loadFiles([file], { replace: true, activate: true });
-            try { StorageManager.set('singlefile_session', { content: jsonData, filename }); } catch (_) {}
-            if (result?.firstIndex >= 0) {
-              switchToTimelineRef.current(result.firstIndex, null);
-            }
+          });
+          await fileActionsRef.current.loadMergedJSONLFiles(fileObjs);
+          switchToTimelineRef.current(0, null);
+        } else {
+          const { content, filename } = payload;
+          const jsonData = typeof content === 'string' ? content : JSON.stringify(content);
+          const blob = new Blob([jsonData], { type: 'application/json' });
+          const file = new File([blob], filename, {
+            type: 'application/json',
+            lastModified: Date.now()
+          });
+          const result = await fileActionsRef.current.loadFiles(
+            [file],
+            { replace: true, activate: true }
+          );
+          try {
+            StorageManager.set('singlefile_session', { content: jsonData, filename });
+          } catch (_) {}
+          if (result?.firstIndex >= 0) {
+            switchToTimelineRef.current(result.firstIndex, null);
           }
-          if (payload.files && Array.isArray(payload.files)) {
-            switchToTimelineRef.current(0, null);
-          }
-          if (payload.exportContext) {
-            setPendingExportContext(payload.exportContext);
-          }
-        } catch (err) {
-          console.error('[Loominary] postMessage load failed:', err);
-          setErrorRef.current('Failed to load data: ' + err.message);
         }
+
+        if (payload.exportContext) {
+          setPendingExportContext(payload.exportContext);
+        }
+      } catch (err) {
+        console.error('[Loominary] postMessage load failed:', err);
+        setErrorRef.current('Failed to load data: ' + err.message);
       }
     };
 
