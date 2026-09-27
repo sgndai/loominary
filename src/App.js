@@ -257,7 +257,7 @@ function NavSearchBox({ onSearch, onExpand, onGlobalSearch, disabled = false }) 
 /**
  * useFileManager - 文件管理Hook
  */
-const useFileManager = () => {
+export const useFileManager = () => {
   const [files, setFiles] = useState([]);
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [processedData, setProcessedData] = useState(null);
@@ -267,6 +267,7 @@ const useFileManager = () => {
   const [pendingFiles, setPendingFiles] = useState([]);
   const [fileMetadata, setFileMetadata] = useState({});
   const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 });
+  const activeFile = files[currentFileIndex] || null;
 
   // 智能解析文件（JSON或JSONL）
   const parseFile = useCallback(async (file) => {
@@ -277,13 +278,13 @@ const useFileManager = () => {
 
   // 处理当前文件。Effect cleanup 使旧文件的异步解析失效，防止 A -> B 切换后 A 的慢结果覆盖 B。
   useEffect(() => {
-    if (!files.length || currentFileIndex >= files.length) {
+    if (!activeFile) {
       setProcessedData(null);
       setIsLoading(false);
       return undefined;
     }
 
-    const file = files[currentFileIndex];
+    const file = activeFile;
     let active = true;
     setIsLoading(true);
     setError(null);
@@ -320,7 +321,7 @@ const useFileManager = () => {
     return () => {
       active = false;
     };
-  }, [files, currentFileIndex, parseFile]);
+  }, [activeFile, parseFile]);
 
   // 检查文件兼容性 - 简化版本，所有格式都兼容
   const checkCompatibility = useCallback(async () => {
@@ -695,7 +696,7 @@ const useFileManager = () => {
 
   return {
     files,
-    currentFile: files[currentFileIndex] || null,
+    currentFile: activeFile,
     currentFileIndex,
     processedData,
     isLoading,
