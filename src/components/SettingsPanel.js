@@ -2,7 +2,8 @@
 // Settings panel for GitHub Pages / standalone mode (mirrors popup.js functionality)
 import React, { useState, useEffect } from 'react';
 import StorageManager from '../utils/data/storageManager.js';
-import { useI18n } from '../index.js';
+import { useI18n, setResolvedLang } from '../index.js';
+import { getViewerBridgeContext, postViewerSettings } from '../utils/viewerBridge.js';
 
 const EXPORT_CONFIG_KEY = 'export-config';
 const THEME_KEY = 'app-theme';
@@ -50,11 +51,8 @@ export default function SettingsPanel({ onClose, exportOptions, setExportOptions
     StorageManager.set(EXPORT_CONFIG_KEY, exportCfg);
     StorageManager.set(THEME_KEY, theme);
     document.documentElement.setAttribute('data-theme', theme);
-    // Sync settings to userscript opener (e.g. claude.ai tab) via postMessage
-    console.log('[Loominary] SettingsPanel: window.opener =', window.opener, '| posting config:', JSON.stringify(exportCfg));
-    if (window.opener) {
-      window.opener.postMessage({ type: 'LOOMINARY_SETTINGS_UPDATE', config: exportCfg }, '*');
-    }
+    // Sync settings only to the authenticated userscript bridge, when this viewer was opened by one.
+    postViewerSettings(getViewerBridgeContext(), exportCfg);
   }, [cfg]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync exportOptions to App.js only when panel closes (avoids scroll-to-top on every keystroke)
@@ -117,7 +115,7 @@ export default function SettingsPanel({ onClose, exportOptions, setExportOptions
 
   const s = zh ? {
     title: '设置', close: '×', saved: '已保存',
-    appearance: '外观', theme: '主题', dark: '🌙 深色', light: '☀️ 浅色',
+    appearance: '外观', theme: '主题', language: '语言', chinese: '简体中文', english: 'English', dark: '🌙 深色', light: '☀️ 浅色',
     format: '导出格式',
     numbering: '序号', noNumbering: '无',
     senderLabel: '发送者标签',
@@ -139,7 +137,7 @@ export default function SettingsPanel({ onClose, exportOptions, setExportOptions
     userMemory: '用户记忆', userMemoryDesc: '用户记忆内容',
   } : {
     title: 'Settings', close: '×', saved: 'Saved',
-    appearance: 'Appearance', theme: 'Theme', dark: '🌙 Dark', light: '☀️ Light',
+    appearance: 'Appearance', theme: 'Theme', language: 'Language', chinese: '简体中文', english: 'English', dark: '🌙 Dark', light: '☀️ Light',
     format: 'Export Format',
     numbering: 'Numbering', noNumbering: 'None',
     senderLabel: 'Sender Label',
@@ -193,6 +191,20 @@ export default function SettingsPanel({ onClose, exportOptions, setExportOptions
                     borderColor: cfg.theme === val ? 'var(--accent-primary)' : 'var(--border-subtle)',
                     background: cfg.theme === val ? 'var(--accent-primary)' : 'var(--bg-secondary)',
                     color: cfg.theme === val ? '#fff' : 'var(--text-primary)' }}>
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border-subtle)', marginBottom: 10 }}>
+            <span style={{ fontWeight: 500 }}>{s.language}</span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {[['zh', s.chinese], ['en', s.english]].map(([val, lbl]) => (
+                <button key={val} onClick={() => { setResolvedLang(val); setSaved(true); setTimeout(() => setSaved(false), 1500); }}
+                  style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid', fontSize: 13, cursor: 'pointer',
+                    borderColor: currentLanguage === val ? 'var(--accent-primary)' : 'var(--border-subtle)',
+                    background: currentLanguage === val ? 'var(--accent-primary)' : 'var(--bg-secondary)',
+                    color: currentLanguage === val ? '#fff' : 'var(--text-primary)' }}>
                   {lbl}
                 </button>
               ))}
