@@ -1083,7 +1083,6 @@ const ConversationTimeline = ({
 
 
             {displayMessages.map((msg, index) => {
-              const branchData = branchAnalysis.branchPoints.get(msg.uuid);
               // 图片：合并 images 数组与 attachments 中的嵌入图片（含 Grok 兼容）
               const embeddedImages = msg.attachments?.filter(att =>
                 att.is_embedded_image || (format === 'grok' && att.file_type?.startsWith('image/'))
