@@ -135,4 +135,34 @@ describe('useFileManager active-file parsing', () => {
       root.unmount();
     });
   });
+
+  test('a parser failure is exposed instead of becoming an empty successful timeline', async () => {
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    let latest = null;
+    const broken = {
+      name: 'broken.json',
+      type: 'application/json',
+      size: 12,
+      lastModified: 3,
+      text: () => Promise.resolve('{broken json')
+    };
+
+    await act(async () => {
+      root.render(<Harness onState={state => { latest = state; }} />);
+    });
+
+    await act(async () => {
+      await latest.actions.loadFiles([broken], { activate: true });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(latest.processedData).toBeNull();
+    expect(latest.error).toBeTruthy();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });
