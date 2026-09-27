@@ -35,7 +35,7 @@ const DEFAULTS = {
 };
 
 export default function SettingsPanel({ onClose, exportOptions, setExportOptions }) {
-  const { t, currentLanguage } = useI18n();
+  const { currentLanguage } = useI18n();
   const zh = currentLanguage === 'zh';
 
   const [cfg, setCfg] = useState(() => ({
