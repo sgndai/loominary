@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - feat/reader-26.3.3
   pull_request:
     branches:
       - main
