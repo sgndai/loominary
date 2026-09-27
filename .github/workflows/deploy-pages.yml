@@ -34,6 +34,11 @@ jobs:
       - name: Build web app
         run: CI=false npm run build
 
+      - name: Build published userscript
+        run: |
+          npm run build:userscript
+          cp dist/loominary.user.js build/loominary.user.js
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
