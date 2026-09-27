@@ -7,6 +7,10 @@ jest.mock('../components/FloatingActionButton', () => () => null);
 jest.mock('../components/SearchOverlay', () => () => null);
 jest.mock('../components/UnifiedCard', () => ({ CardGrid: () => null }));
 jest.mock('../components/SettingsPanel', () => () => null);
+jest.mock('../index.js', () => ({
+  useI18n: () => ({ t: key => key }),
+  setResolvedLang: jest.fn()
+}));
 
 const { useFileManager } = require('../App');
 
