@@ -131,7 +131,10 @@
       "filterBranches": "Branches",
       "showAll": "Show all",
       "showSelectedOnly": "Show selected branch only",
-      "noBranches": "No branches in current conversation"
+      "noBranches": "No branches in current conversation",
+      "versions": "Message versions",
+      "previousVersion": "Previous version",
+      "nextVersion": "Next version"
     },
     "conversation": {
       "unknownTime": "Unknown time",
@@ -140,7 +143,8 @@
     },
     "file": {
       "clickToPrevious": "Click to switch to previous file",
-      "clickToNext": "Click to switch to next file"
+      "clickToNext": "Click to switch to next file",
+      "navigation": "File navigation"
     },
     "actions": {
       "resetMarks": "Reset marks",
@@ -162,11 +166,13 @@
       "unmarkCompleted": "Unmark completed",
       "markImportant": "Star Mark",
       "unmarkImportant": "Unmark important",
-      "markDeleted": "Deleted Mark",
-      "unmarkDeleted": "Unmark deleted",
+      "markDeleted": "Exclude from export",
+      "unmarkDeleted": "Include in export",
       "jumpToLatest": "Jump to Latest",
       "previousMessage": "Previous message",
-      "nextMessage": "Next message"
+      "nextMessage": "Next message",
+      "openContext": "Context",
+      "openDetails": "Details"
     },
     "info": {
       "modelPlatform": "Model/Platform",
@@ -183,7 +189,8 @@
       "citations": " citations",
       "completed": "Completed",
       "important": "Important",
-      "deleted": "Deleted"
+      "deleted": "Excluded from export",
+      "excluded": "Excluded from export"
     }
   },
   "card": {
@@ -668,106 +675,106 @@
     }
   },
   "search": {
-      "all": "All",
-      "titles": "Titles",
-      "content": "Content",
-      "modeAll": "Search all content",
-      "modeTitles": "Search titles only",
-      "modeContent": "Search content only",
-      "placeholderAll": "Search all messages...",
-      "placeholderTitles": "Search conversation titles...",
-      "placeholderContent": "Search message content...",
-      "options": "Search Options",
-      "indexStats": "{{messages}} messages, {{files}} files",
-      "removeDuplicates": "Remove duplicates",
-      "removeDuplicatesDesc": "Deduplicate based on the first 100 characters of message content, not limited to retry messages",
-      "includeThinking": "Include thinking",
-      "includeArtifacts": "Include Artifacts",
-      "messagesWithThinking": "{{count}} messages with thinking",
-      "messagesWithArtifacts": "{{count}} messages with Artifacts",
-      "blankMessages": "{{count}} blank messages",
-      "expandPanel": "Expand search panel",
-      "history": {
-        "title": "Search History",
-        "delete": "Delete this record"
-      }
+    "all": "All",
+    "titles": "Titles",
+    "content": "Content",
+    "modeAll": "Search all content",
+    "modeTitles": "Search titles only",
+    "modeContent": "Search content only",
+    "placeholderAll": "Search all messages...",
+    "placeholderTitles": "Search conversation titles...",
+    "placeholderContent": "Search message content...",
+    "options": "Search Options",
+    "indexStats": "{{messages}} messages, {{files}} files",
+    "removeDuplicates": "Remove duplicates",
+    "removeDuplicatesDesc": "Deduplicate based on the first 100 characters of message content, not limited to retry messages",
+    "includeThinking": "Include thinking",
+    "includeArtifacts": "Include Artifacts",
+    "messagesWithThinking": "{{count}} messages with thinking",
+    "messagesWithArtifacts": "{{count}} messages with Artifacts",
+    "blankMessages": "{{count}} blank messages",
+    "expandPanel": "Expand search panel",
+    "history": {
+      "title": "Search History",
+      "delete": "Delete this record"
+    }
+  },
+  "nodeLocator": {
+    "title": "Search Results",
+    "searching": "Searching",
+    "foundMessages": "Found {{count}} messages from {{fileCount}} files, {{conversationCount}} conversations",
+    "listView": "List View",
+    "treeView": "Tree View",
+    "selectFile": "Select File",
+    "chooseFile": "Please select a file",
+    "results": "results",
+    "resultCount": "{{count}} results",
+    "matches": "matches",
+    "singleConversation": "Single conversation",
+    "blocked": "Blocked",
+    "retry": "Retry",
+    "duplicate": "Duplicate",
+    "blankMessage": "Blank message",
+    "hasThinking": "Thinking",
+    "hasArtifacts": "Artifacts",
+    "messages": "messages",
+    "file": "File"
+  },
+  "semanticSearch": {
+    "title": "Semantic Search",
+    "header": "🔮 Semantic Search",
+    "settings": "Settings",
+    "close": "Close",
+    "embeddingModel": {
+      "title": "Embedding Model",
+      "apiUrl": "API URL",
+      "apiUrlPlaceholder": "http://localhost:1234",
+      "modelName": "Model Name",
+      "modelNamePlaceholder": "qwen3-embedding",
+      "infoLmstudio": "💡 Please ensure local Embedding service is running with model loaded."
     },
-    "nodeLocator": {
-      "title": "Search Results",
-      "searching": "Searching",
-      "foundMessages": "Found {{count}} messages from {{fileCount}} files, {{conversationCount}} conversations",
-      "listView": "List View",
-      "treeView": "Tree View",
-      "selectFile": "Select File",
-      "chooseFile": "Please select a file",
-      "results": "results",
-      "resultCount": "{{count}} results",
-      "matches": "matches",
-      "singleConversation": "Single conversation",
-      "blocked": "Blocked",
-      "retry": "Retry",
-      "duplicate": "Duplicate",
-      "blankMessage": "Blank message",
-      "hasThinking": "Thinking",
-      "hasArtifacts": "Artifacts",
-      "messages": "messages",
-      "file": "File"
+    "llmConfig": {
+      "title": "AI Response (Optional)",
+      "provider": "AI Service",
+      "none": "Search Only (No AI)",
+      "openai": "OpenAI",
+      "claude": "Claude",
+      "apiKey": "API Key",
+      "apiKeyPlaceholder": "Enter your API key",
+      "apiEndpoint": "API Endpoint",
+      "apiEndpointPlaceholder": "",
+      "model": "Model",
+      "modelPlaceholder": "Enter model name (e.g., gpt-4o-mini)"
     },
-    "semanticSearch": {
-      "title": "Semantic Search",
-      "header": "🔮 Semantic Search",
-      "settings": "Settings",
-      "close": "Close",
-      "embeddingModel": {
-        "title": "Embedding Model",
-        "apiUrl": "API URL",
-        "apiUrlPlaceholder": "http://localhost:1234",
-        "modelName": "Model Name",
-        "modelNamePlaceholder": "qwen3-embedding",
-        "infoLmstudio": "💡 Please ensure local Embedding service is running with model loaded."
-      },
-      "llmConfig": {
-        "title": "AI Response (Optional)",
-        "provider": "AI Service",
-        "none": "Search Only (No AI)",
-        "openai": "OpenAI",
-        "claude": "Claude",
-        "apiKey": "API Key",
-        "apiKeyPlaceholder": "Enter your API key",
-        "apiEndpoint": "API Endpoint",
-        "apiEndpointPlaceholder": "",
-        "model": "Model",
-        "modelPlaceholder": "Enter model name (e.g., gpt-4o-mini)"
-      },
-      "status": {
-        "initializing": "Initializing...",
-        "waitingFiles": "⏳ Waiting for files to stabilize...",
-        "rebuildIndex": "🔄 Rebuild Index",
-        "ready": "✅ Ready",
-        "indexSize": "{{count}} messages",
-        "embeddingInfo": "Embedding · {{count}} messages",
-        "filesChanging": "Files changing, waiting for stability...",
-        "filesChanged": "Files changed, please rebuild index"
-      },
-      "chat": {
-        "placeholder": "Ask me anything about your conversation history...",
-        "placeholderWaiting": "Files loading, enter your question, will auto-search when stable...",
-        "placeholderIndexing": "Enter your question, will auto-search after indexing...",
-        "placeholderNotReady": "Enter your question and press Enter, will auto-start indexing...",
-        "send": "Send",
-        "search": "Search",
-        "greeting": "👋 Hello! I can help you search through your conversation history.",
-        "noResults": "No relevant conversation records found. Please try other keywords.",
-        "resultsIntro": "Here are conversation records related to your question:",
-        "searchError": "Search error: {{error}}",
-        "waitingIndex": "⏳ Building index, will auto-search when complete...",
-        "waitingFiles": "⏳ Waiting for files to stabilize, will auto-build index and search..."
-      },
-      "results": {
-        "score": "{{score}}%",
-        "preview": "Preview"
-      }
+    "status": {
+      "initializing": "Initializing...",
+      "waitingFiles": "⏳ Waiting for files to stabilize...",
+      "rebuildIndex": "🔄 Rebuild Index",
+      "ready": "✅ Ready",
+      "indexSize": "{{count}} messages",
+      "embeddingInfo": "Embedding · {{count}} messages",
+      "filesChanging": "Files changing, waiting for stability...",
+      "filesChanged": "Files changed, please rebuild index"
     },
+    "chat": {
+      "placeholder": "Ask me anything about your conversation history...",
+      "placeholderWaiting": "Files loading, enter your question, will auto-search when stable...",
+      "placeholderIndexing": "Enter your question, will auto-search after indexing...",
+      "placeholderNotReady": "Enter your question and press Enter, will auto-start indexing...",
+      "send": "Send",
+      "search": "Search",
+      "greeting": "👋 Hello! I can help you search through your conversation history.",
+      "noResults": "No relevant conversation records found. Please try other keywords.",
+      "resultsIntro": "Here are conversation records related to your question:",
+      "searchError": "Search error: {{error}}",
+      "waitingIndex": "⏳ Building index, will auto-search when complete...",
+      "waitingFiles": "⏳ Waiting for files to stabilize, will auto-build index and search..."
+    },
+    "results": {
+      "score": "{{score}}%",
+      "preview": "Preview"
+    }
+  },
   "actionPanel": {
     "title": "Action Panel",
     "nav": {
