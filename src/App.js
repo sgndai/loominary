@@ -275,43 +275,52 @@ const useFileManager = () => {
     return isJSONL ? parseJSONL(text) : JSON.parse(text);
   }, []);
 
-  // 处理当前文件
-  const processCurrentFile = useCallback(async () => {
+  // 处理当前文件。Effect cleanup 使旧文件的异步解析失效，防止 A -> B 切换后 A 的慢结果覆盖 B。
+  useEffect(() => {
     if (!files.length || currentFileIndex >= files.length) {
       setProcessedData(null);
-      return;
+      setIsLoading(false);
+      return undefined;
     }
+
+    const file = files[currentFileIndex];
+    let active = true;
     setIsLoading(true);
     setError(null);
-    try {
-      const file = files[currentFileIndex];
 
-      // 检查是否有预处理的合并数据
-      if (file._mergedProcessedData) {
-        console.log('[Loominary] 使用预处理的合并数据');
-        setProcessedData(file._mergedProcessedData);
-      } else {
-        console.log('[Loominary processCurrentFile] parsing file:', file.name, file.size, 'bytes');
-        const jsonData = await parseFile(file);
-        console.log('[Loominary processCurrentFile] parseFile OK - top-level keys:', Array.isArray(jsonData) ? `Array[${jsonData.length}]` : Object.keys(jsonData));
-        let data = extractChatData(jsonData, file.name);
-        console.log('[Loominary processCurrentFile] extractChatData OK - format:', data?.format, 'chat_history length:', data?.chat_history?.length);
-        data = detectBranches(data);
-        console.log('[Loominary processCurrentFile] detectBranches OK');
+    const process = async () => {
+      try {
+        let data;
+        if (file._mergedProcessedData) {
+          console.log('[Loominary] 使用预处理的合并数据');
+          data = file._mergedProcessedData;
+        } else {
+          console.log('[Loominary processCurrentFile] parsing file:', file.name, file.size, 'bytes');
+          const jsonData = await parseFile(file);
+          console.log('[Loominary processCurrentFile] parseFile OK - top-level keys:', Array.isArray(jsonData) ? `Array[${jsonData.length}]` : Object.keys(jsonData));
+          data = extractChatData(jsonData, file.name);
+          console.log('[Loominary processCurrentFile] extractChatData OK - format:', data?.format, 'chat_history length:', data?.chat_history?.length);
+          data = detectBranches(data);
+          console.log('[Loominary processCurrentFile] detectBranches OK');
+        }
+
+        if (!active) return;
         setProcessedData(data);
+      } catch (err) {
+        if (!active) return;
+        console.error('[Loominary processCurrentFile] 处理文件出错:', err);
+        setError(err.message);
+        setProcessedData(null);
+      } finally {
+        if (active) setIsLoading(false);
       }
-    } catch (err) {
-      console.error('[Loominary processCurrentFile] 处理文件出错:', err);
-      setError(err.message);
-      setProcessedData(null);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [files, currentFileIndex, parseFile]);
+    };
 
-  useEffect(() => {
-    processCurrentFile();
-  }, [processCurrentFile]);
+    process();
+    return () => {
+      active = false;
+    };
+  }, [files, currentFileIndex, parseFile]);
 
   // 检查文件兼容性 - 简化版本，所有格式都兼容
   const checkCompatibility = useCallback(async () => {
@@ -319,7 +328,7 @@ const useFileManager = () => {
   }, []);
 
   // 加载文件
-  const loadFiles = useCallback(async (fileList, { replace = false } = {}) => {
+  const loadFiles = useCallback(async (fileList, { replace = false, activate = false } = {}) => {
     const validFiles = fileList.filter(f =>
       f.name.endsWith('.json') || f.name.endsWith('.jsonl') || f.type === 'application/json'
     );
@@ -331,8 +340,12 @@ const useFileManager = () => {
       !files.some(ef => ef.name === nf.name && ef.lastModified === nf.lastModified)
     );
     if (!newFiles.length) {
+      const existingIndex = validFiles.length === 1
+        ? files.findIndex(ef => ef.name === validFiles[0].name && ef.lastModified === validFiles[0].lastModified)
+        : -1;
+      if (activate && existingIndex >= 0) setCurrentFileIndex(existingIndex);
       setError('文件已加载');
-      return;
+      return { firstIndex: existingIndex, count: 0, added: false };
     }
     const isCompatible = await checkCompatibility(newFiles);
     if (!isCompatible) {
@@ -391,10 +404,12 @@ const useFileManager = () => {
       });
       StorageManager.remove('pending_project_config');
     }
+    const firstIndex = replace ? 0 : files.length;
     setFileMetadata(replace ? newMeta : (prev => ({ ...prev, ...newMeta })));
     setFiles(replace ? newFiles : (prev => [...prev, ...newFiles]));
-    if (replace) setCurrentFileIndex(0);
+    if (replace || activate) setCurrentFileIndex(firstIndex);
     setError(null);
+    return { firstIndex, count: newFiles.length, added: true };
   }, [files, checkCompatibility, parseFile]);
 
   // 按对话分组（基于 integrity, main_chat, 或 chat_id_hash）
