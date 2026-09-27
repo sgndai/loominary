@@ -71,7 +71,11 @@ export function analyzeBranches(messages) {
         const sortedChildren = children
           .map(uuid => msgDict[uuid])
           .filter(msg => msg)
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+          .sort((a, b) => {
+            const aIndex = Number.isFinite(a.index) ? a.index : Number.MAX_SAFE_INTEGER;
+            const bIndex = Number.isFinite(b.index) ? b.index : Number.MAX_SAFE_INTEGER;
+            return aIndex - bIndex;
+          });
 
         const branches = sortedChildren.map((childMsg, branchIndex) => {
           const branchMessages = findBranchMessages(childMsg.uuid, msgDict, parentChildren);
@@ -181,6 +185,28 @@ export function filterDisplayMessages(messages, branchFilters, branchAnalysis, s
  * @param {{ messageUuid, messageId, messageIndex, fileIndex, conversationUuid }} locator
  * @returns {Object|null}
  */
+export function getMessageVersionInfo(message, branchAnalysis, branchFilters = new Map()) {
+  if (!message || !branchAnalysis?.branchPoints) return null;
+
+  const parentUuid = message.parent_uuid || ROOT_UUID;
+  const branchData = branchAnalysis.branchPoints.get(parentUuid);
+  if (!branchData || branchData.branches.length <= 1) return null;
+
+  const versionIndex = branchData.branches.findIndex(branch =>
+    branch.startMessage?.uuid === message.uuid
+  );
+  if (versionIndex < 0) return null;
+
+  return {
+    branchPointUuid: parentUuid,
+    versionIndex,
+    selectedIndex: branchFilters.get(parentUuid) ?? branchData.currentBranchIndex ?? 0,
+    totalVersions: branchData.branches.length,
+    canPrevious: versionIndex > 0,
+    canNext: versionIndex < branchData.branches.length - 1
+  };
+}
+
 export function findMessageByLocator(messages, { messageUuid, messageId, messageIndex, fileIndex, conversationUuid }) {
   // 优先使用 uuid
   if (messageUuid) {
