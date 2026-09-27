@@ -559,10 +559,11 @@
                     return new Promise((resolve) => {
                         let settled = false;
                         let newWin = null;
+                        let timeout = null;
 
                         const cleanup = () => {
                             _opener.removeEventListener('message', handler);
-                            clearTimeout(timeout);
+                            if (timeout !== null) clearTimeout(timeout);
                         };
 
                         const finish = (value) => {
@@ -603,7 +604,7 @@
                             return;
                         }
 
-                        const timeout = setTimeout(() => {
+                        timeout = setTimeout(() => {
                             console.warn('[Loominary] Timed out waiting for the viewer READY message');
                             finish(false);
                         }, 15000);
