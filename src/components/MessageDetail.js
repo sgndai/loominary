@@ -92,6 +92,7 @@ const MessageDetail = ({
   format,
   onTabChange,
   showTabs = true,
+  contentOnly = false,
   systemContext = null,  // system context 模式
   notes = {},
   onNoteChange = null
@@ -1135,6 +1136,14 @@ const MessageDetail = ({
   }
 
   // ==================== 正常消息模式 ====================
+  if (contentOnly) {
+    return (
+      <div className="message-detail-inline" ref={contentRef}>
+        {renderTabContent()}
+      </div>
+    );
+  }
+
   return (
     <div className="message-detail" ref={contentRef}>
       {showTabs && availableTabs.length >= 1 && (
