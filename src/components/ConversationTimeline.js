@@ -656,7 +656,7 @@ const ConversationTimeline = ({
 
     window.addEventListener('scrollToMessage', handleScrollToMessage);
     return () => window.removeEventListener('scrollToMessage', handleScrollToMessage);
-  }, [messages, displayMessages, branchAnalysis, handleShowAllBranches, showAllBranches]);
+  }, [messages, displayMessages, branchAnalysis, handleShowAllBranches, showAllBranches, onBranchStateChange, branchStateKey, scrollToMessageInPanel]);
 
   // 只恢复当前对话自己的分支状态，避免固定 ROOT_UUID 跨对话串线。
   useEffect(() => {
@@ -898,7 +898,7 @@ const ConversationTimeline = ({
         messageEl.classList.remove('highlight-from-search');
       }, 3000);
     }
-  }, [messages, displayMessages, branchAnalysis, showAllBranches, onBranchStateChange]);
+  }, [messages, displayMessages, branchAnalysis, showAllBranches, onBranchStateChange, branchStateKey, scrollToMessageInPanel]);
 
   // ==================== 工具函数 ====================
 
