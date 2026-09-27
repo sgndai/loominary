@@ -723,6 +723,10 @@ const ConversationTimeline = ({
   }, [isMobile]);
 
   const handleMessageSelect = (messageIndex) => {
+    if (!isMobile && !isSystemContextSelected && selectedMessageIndex === messageIndex) {
+      setSelectedMessageIndex(null);
+      return;
+    }
     setSelectedMessageIndex(messageIndex);
     setIsSystemContextSelected(false);
     setActiveTab('content');
@@ -730,6 +734,10 @@ const ConversationTimeline = ({
   };
 
   const handleSystemContextSelect = () => {
+    if (!isMobile && isSystemContextSelected) {
+      setIsSystemContextSelected(false);
+      return;
+    }
     setIsSystemContextSelected(true);
     setSelectedMessageIndex(null);
     setActiveTab('instructions');
@@ -963,11 +971,12 @@ const ConversationTimeline = ({
   // ==================== 渲染 ====================
 
   const platformClass = PlatformUtils.getPlatformClass(conversationInfo?.platform);
+  const detailPanelOpen = isMobile || isSystemContextSelected || selectedMessageIndex !== null;
   const prevFilePreview = getFilePreview('prev');
   const nextFilePreview = getFilePreview('next');
 
   return (
-    <div className={`enhanced-timeline-container ${platformClass} desktop-layout`}>
+    <div className={`enhanced-timeline-container ${platformClass} desktop-layout ${detailPanelOpen ? 'detail-open' : 'detail-closed'}`}>
       <div className="timeline-main-content">
         {/* 左侧时间线面板 */}
         <div className="timeline-left-panel" ref={leftPanelRef} style={{ opacity: isTransitioning ? 0 : 1, transition: 'opacity 0.2s ease' }}>
