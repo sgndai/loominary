@@ -6,14 +6,13 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import MessageDetail from './MessageDetail';
 import PlatformIcon, { inferJsonlModelKey } from './PlatformIcon';
-import { PlatformUtils, DateTimeUtils, TextUtils } from '../utils/fileParser';
+import { PlatformUtils, DateTimeUtils } from '../utils/fileParser';
 import { useI18n } from '../index.js';
 import { getRenameManager } from '../utils/data/renameManager.js';
 import StorageManager from '../utils/data/storageManager.js';
-import BranchSwitcher from './BranchSwitcher';
 import SystemContextCard from './SystemContextCard';
-import { analyzeBranches, filterDisplayMessages, ROOT_UUID, findMessageByLocator, computeBranchFiltersForMessage } from '../utils/branchAnalysis';
-import { Copy, ClipboardCheck, Star, Trash2, Pencil, ChevronsDown, RotateCcw, ChevronUp, ChevronDown, ChevronLeft, GitBranch, Filter, Image, Check, Search } from 'lucide-react';
+import { analyzeBranches, filterDisplayMessages, ROOT_UUID, findMessageByLocator, computeBranchFiltersForMessage, getMessageVersionInfo } from '../utils/branchAnalysis';
+import { Copy, ClipboardCheck, Star, Trash2, Pencil, ChevronsDown, RotateCcw, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, GitBranch, Filter, Image, Check, Search } from 'lucide-react';
 
 const MOBILE_BREAKPOINT = 768;
 
@@ -982,7 +981,6 @@ const ConversationTimeline = ({
   const platformClass = PlatformUtils.getPlatformClass(conversationInfo?.platform);
   const prevFilePreview = getFilePreview('prev');
   const nextFilePreview = getFilePreview('next');
-  const rootBranchData = branchAnalysis.branchPoints.get(ROOT_UUID);
 
   return (
     <div className={`enhanced-timeline-container ${platformClass} desktop-layout`}>
@@ -1084,25 +1082,6 @@ const ConversationTimeline = ({
             <div className="timeline-line"></div>
 
 
-            {/* 根分支切换器（第一条消息就有分支的情况） */}
-            {rootBranchData && rootBranchData.branches.length > 1 && !showAllBranches && (
-              <div className="root-branch-container">
-                <div className="root-branch-label">
-                  <span className="label-text">{t('timeline.branch.detected')} {branchAnalysis.branchPoints.size} {t('timeline.branch.branchPoints')}</span>
-                </div>
-                <BranchSwitcher
-                  key={`branch-${ROOT_UUID}`}
-                  branchPoint={rootBranchData.branchPoint}
-                  availableBranches={rootBranchData.branches}
-                  currentBranchIndex={branchFilters.get(ROOT_UUID) ?? rootBranchData.currentBranchIndex}
-                  onBranchChange={(newIndex) => handleBranchSwitch(ROOT_UUID, newIndex)}
-                  onShowAllBranches={handleShowAllBranches}
-                  showAllMode={false}
-                  className="timeline-branch-switcher"
-                />
-              </div>
-            )}
-
             {displayMessages.map((msg, index) => {
               const branchData = branchAnalysis.branchPoints.get(msg.uuid);
               // 图片：合并 images 数组与 attachments 中的嵌入图片（含 Grok 兼容）
@@ -1114,9 +1093,9 @@ const ConversationTimeline = ({
               const regularAttachments = msg.attachments?.filter(att =>
                 !att.is_embedded_image && !(format === 'grok' && att.file_type?.startsWith('image/'))
               ) || [];
-              const shouldShowBranchSwitcher = branchData &&
-                branchData.branches.length > 1 &&
-                !showAllBranches;
+              const versionInfo = !showAllBranches
+                ? getMessageVersionInfo(msg, branchAnalysis, branchFilters)
+                : null;
 
               return (
                 <React.Fragment key={msg.uuid || index}>
@@ -1153,6 +1132,35 @@ const ConversationTimeline = ({
                             <div className="sender-time">
                               {DateTimeUtils.formatTime(msg.timestamp)}
                             </div>
+                            {versionInfo && (
+                              <div
+                                className="message-version-switcher"
+                                onClick={(event) => event.stopPropagation()}
+                                aria-label={`${versionInfo.versionIndex + 1}/${versionInfo.totalVersions}`}
+                              >
+                                <button
+                                  type="button"
+                                  className="message-version-arrow"
+                                  disabled={!versionInfo.canPrevious}
+                                  onClick={() => handleBranchSwitch(versionInfo.branchPointUuid, versionInfo.versionIndex - 1)}
+                                  aria-label="Previous version"
+                                >
+                                  <ChevronLeft size={14} />
+                                </button>
+                                <span className="message-version-count">
+                                  {versionInfo.versionIndex + 1}/{versionInfo.totalVersions}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="message-version-arrow"
+                                  disabled={!versionInfo.canNext}
+                                  onClick={() => handleBranchSwitch(versionInfo.branchPointUuid, versionInfo.versionIndex + 1)}
+                                  aria-label="Next version"
+                                >
+                                  <ChevronRight size={14} />
+                                </button>
+                              </div>
+                            )}
                           </div>
                         </div>
 
@@ -1163,7 +1171,7 @@ const ConversationTimeline = ({
                           remarkPlugins={[remarkGfm]}
                           components={TIMELINE_MD_COMPONENTS}
                         >
-                          {TextUtils.getPreview(msg.display_text)}
+                          {msg.display_text || ''}
                         </ReactMarkdown>
                       </div>
 
@@ -1238,19 +1246,6 @@ const ConversationTimeline = ({
                     </div>
                   </div>
 
-                  {/* 分支切换器 */}
-                  {shouldShowBranchSwitcher && (
-                    <BranchSwitcher
-                      key={`branch-${msg.uuid}`}
-                      branchPoint={msg}
-                      availableBranches={branchData.branches}
-                      currentBranchIndex={branchFilters.get(msg.uuid) ?? branchData.currentBranchIndex}
-                      onBranchChange={(newIndex) => handleBranchSwitch(msg.uuid, newIndex)}
-                      onShowAllBranches={handleShowAllBranches}
-                      showAllMode={false}
-                      className="timeline-branch-switcher"
-                    />
-                  )}
                 </React.Fragment>
               );
             })}
