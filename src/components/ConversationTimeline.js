@@ -953,62 +953,58 @@ const ConversationTimeline = ({
     return 'assistant platform-claude';
   };
 
-  const getFilePreview = (direction) => {
-    if (!files || files.length <= 1 || currentFileIndex === null) {
-      return null;
-    }
-
-    const targetIndex = direction === 'prev' ? currentFileIndex - 1 : currentFileIndex + 1;
-    if (targetIndex < 0 || targetIndex >= files.length) return null;
-
-    return {
-      file: files[targetIndex],
-      index: targetIndex,
-      direction
-    };
-  };
-
   // ==================== 渲染 ====================
 
   const platformClass = PlatformUtils.getPlatformClass(conversationInfo?.platform);
   const detailPanelOpen = isMobile || isSystemContextSelected || selectedMessageIndex !== null;
-  const prevFilePreview = getFilePreview('prev');
-  const nextFilePreview = getFilePreview('next');
 
   return (
     <div className={`enhanced-timeline-container ${platformClass} desktop-layout ${detailPanelOpen ? 'detail-open' : 'detail-closed'}`}>
       <div className="timeline-main-content">
         {/* 左侧时间线面板 */}
         <div className="timeline-left-panel" ref={leftPanelRef} style={{ opacity: isTransitioning ? 0 : 1, transition: 'opacity 0.2s ease' }}>
-          {/* 文件切换预览 - 顶部 */}
-          {prevFilePreview && (
-            <div
-              className="file-preview file-preview-top"
-              onClick={() => onFileSwitch && onFileSwitch(prevFilePreview.index)}
-            >
-              <div className="file-preview-inner">
-                <ChevronUp size={24} className="file-preview-arrow" />
-                <span className="file-preview-name">{prevFilePreview.file.name}</span>
-                <span className="file-preview-hint">{t('timeline.file.clickToPrevious')}</span>
-              </div>
-            </div>
-          )}
-
           {/* 对话信息卡片 */}
           {conversationInfo && (
             <div className={"conversation-info-card"}>
-              <h2>
-                {conversationInfo.name}
-                {conversationInfo.is_starred && <Star size={16} style={{ marginLeft: '6px', verticalAlign: 'middle', color: 'var(--accent-primary)' }} />}
-                <button
-                  className="btn-secondary small"
-                  onClick={handleOpenRename}
-                  title={t('rename.action')}
-                  style={{ marginLeft: '4px' }}
-                >
-                  <Pencil size={13} />
-                </button>
-              </h2>
+              <div className="conversation-title-row">
+                <h2>
+                  {conversationInfo.name}
+                  {conversationInfo.is_starred && <Star size={16} style={{ marginLeft: '6px', verticalAlign: 'middle', color: 'var(--accent-primary)' }} />}
+                  <button
+                    className="btn-secondary small"
+                    onClick={handleOpenRename}
+                    title={t('rename.action')}
+                    style={{ marginLeft: '4px' }}
+                  >
+                    <Pencil size={13} />
+                  </button>
+                </h2>
+                {files.length > 1 && currentFileIndex !== null && (
+                  <div className="compact-file-navigator" onClick={(event) => event.stopPropagation()}>
+                    <button
+                      type="button"
+                      className="message-version-arrow"
+                      disabled={currentFileIndex <= 0}
+                      onClick={() => onFileSwitch && onFileSwitch(currentFileIndex - 1)}
+                      title={currentFileIndex > 0 ? files[currentFileIndex - 1]?.name : ''}
+                      aria-label={t('timeline.file.clickToPrevious')}
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+                    <span className="message-version-count">{currentFileIndex + 1}/{files.length}</span>
+                    <button
+                      type="button"
+                      className="message-version-arrow"
+                      disabled={currentFileIndex >= files.length - 1}
+                      onClick={() => onFileSwitch && onFileSwitch(currentFileIndex + 1)}
+                      title={currentFileIndex < files.length - 1 ? files[currentFileIndex + 1]?.name : ''}
+                      aria-label={t('timeline.file.clickToNext')}
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
+                )}
+              </div>
               <div className="info-grid">
                 <div className="info-item">
                   <span className="info-label">{t('timeline.info.modelPlatform')}</span>
@@ -1243,19 +1239,6 @@ const ConversationTimeline = ({
             })}
           </div>
 
-          {/* 文件切换预览 - 底部 */}
-          {nextFilePreview && (
-            <div
-              className="file-preview file-preview-bottom"
-              onClick={() => onFileSwitch && onFileSwitch(nextFilePreview.index)}
-            >
-              <div className="file-preview-inner">
-                <ChevronDown size={24} className="file-preview-arrow" />
-                <span className="file-preview-name">{nextFilePreview.file.name}</span>
-                <span className="file-preview-hint">{t('timeline.file.clickToNext')}</span>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* 右侧消息详情 */}
