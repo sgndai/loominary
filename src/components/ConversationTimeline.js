@@ -265,7 +265,8 @@ const ConversationTimeline = ({
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [activeTab, setActiveTab] = useState('content');
   const [branchFilters, setBranchFilters] = useState(new Map());
-  const [showAllBranches, setShowAllBranches] = useState(branchState?.showAllBranches || false);
+  const [showAllBranches, setShowAllBranches] = useState(false);
+  const branchStateKey = conversation?.uuid || data?.meta_info?.uuid || null;
   const [copiedMessageIndex, setCopiedMessageIndex] = useState(null);
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
 
@@ -413,14 +414,15 @@ const ConversationTimeline = ({
       if (onBranchStateChange) {
         onBranchStateChange({
           showAllBranches: false,
-          currentBranchIndexes: newFilters
+          currentBranchIndexes: newFilters,
+          conversationUuid: branchStateKey
         });
       }
 
       return newFilters;
     });
 
-  }, [onBranchStateChange]);
+  }, [onBranchStateChange, branchStateKey]);
 
   const handleShowAllBranches = useCallback(() => {
     const newShowAllBranches = !showAllBranches;
@@ -432,7 +434,8 @@ const ConversationTimeline = ({
     if (onBranchStateChange) {
       onBranchStateChange({
         showAllBranches: newShowAllBranches,
-        currentBranchIndexes: newShowAllBranches ? new Map() : branchFilters
+        currentBranchIndexes: newShowAllBranches ? new Map() : branchFilters,
+        conversationUuid: branchStateKey
       });
     }
 
@@ -440,13 +443,13 @@ const ConversationTimeline = ({
       setBranchFilters(new Map());
     }
 
-  }, [showAllBranches, branchFilters, onBranchStateChange]);
+  }, [showAllBranches, branchFilters, onBranchStateChange, branchStateKey]);
 
   // ==================== 状态和副作用 ====================
 
   // 重置分支状态 - 当对话切换时，立即隐藏
   useEffect(() => {
-    const uuid = conversation?.uuid;
+    const uuid = branchStateKey;
     // 相同 uuid 不重置（防止同一文件重复加载时清空分支状态）
     if (uuid === lastResetUuidRef.current) return;
     lastResetUuidRef.current = uuid;
@@ -454,7 +457,7 @@ const ConversationTimeline = ({
     setBranchFilters(new Map());
     setShowAllBranches(false);
     setSelectedMessageIndex(null);
-  }, [conversation?.uuid]);
+  }, [branchStateKey]);
 
   // 新消息到来后 fade-in
   useEffect(() => {
@@ -551,7 +554,8 @@ const ConversationTimeline = ({
           if (onBranchStateChange) {
             onBranchStateChange({
               showAllBranches: false,
-              currentBranchIndexes: newBranchFilters
+              currentBranchIndexes: newBranchFilters,
+              conversationUuid: branchStateKey
             });
           }
 
@@ -654,15 +658,13 @@ const ConversationTimeline = ({
     return () => window.removeEventListener('scrollToMessage', handleScrollToMessage);
   }, [messages, displayMessages, branchAnalysis, handleShowAllBranches, showAllBranches]);
 
-  // 同步外部分支状态
+  // 只恢复当前对话自己的分支状态，避免固定 ROOT_UUID 跨对话串线。
   useEffect(() => {
-    if (branchState) {
-      setShowAllBranches(branchState.showAllBranches);
-      if (branchState.currentBranchIndexes) {
-        setBranchFilters(branchState.currentBranchIndexes);
-      }
+    if (branchState?.conversationUuid === branchStateKey) {
+      setShowAllBranches(!!branchState.showAllBranches);
+      setBranchFilters(branchState.currentBranchIndexes || new Map());
     }
-  }, [branchState]);
+  }, [branchState, branchStateKey]);
 
   // 新增：当 displayMessages 更改时通知父组件
   useEffect(() => {
@@ -682,14 +684,14 @@ const ConversationTimeline = ({
   useEffect(() => {
     if (branchAnalysis.branchPoints.size > 0 && branchFilters.size === 0 && !showAllBranches) {
       // 父组件已有分支状态时不用 defaults 覆盖（防止 branchState-sync 与 init 的竞态）
-      if (branchState?.currentBranchIndexes?.size > 0) return;
+      if (branchState?.conversationUuid === branchStateKey && branchState?.currentBranchIndexes?.size > 0) return;
       const initialFilters = new Map();
       branchAnalysis.branchPoints.forEach((branchData, branchPointUuid) => {
-        initialFilters.set(branchPointUuid, 0);
+        initialFilters.set(branchPointUuid, branchData.currentBranchIndex ?? 0);
       });
       setBranchFilters(initialFilters);
     }
-  }, [branchAnalysis.branchPoints, branchFilters.size, showAllBranches, branchState]);
+  }, [branchAnalysis.branchPoints, branchFilters.size, showAllBranches, branchState, branchStateKey]);
 
   useEffect(() => {
     if (messages.length > 0 && !selectedMessageIndex) {
@@ -827,7 +829,8 @@ const ConversationTimeline = ({
       if (onBranchStateChange) {
         onBranchStateChange({
           showAllBranches: false,
-          currentBranchIndexes: newBranchFilters
+          currentBranchIndexes: newBranchFilters,
+          conversationUuid: branchStateKey
         });
       }
 
