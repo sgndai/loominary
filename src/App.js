@@ -799,7 +799,8 @@ function App() {
   const [renameVersion, setRenameVersion] = useState(0);
   const [currentBranchState, setCurrentBranchState] = useState({
     showAllBranches: false,
-    currentBranchIndexes: new Map()
+    currentBranchIndexes: new Map(),
+    conversationUuid: null
   });
   const [timelineDisplayMessages, setTimelineDisplayMessages] = useState([]); // 新增：存储时间线中实际显示的消息（经过分支过滤）
   const [exportOptions, setExportOptions] = useState(() => {
@@ -1034,6 +1035,14 @@ function App() {
     }
     return conv;
   }, [viewMode, processedData, files, currentFileIndex, fileMetadata, renameVersion, hasZipData]);
+
+  const activeBranchConversationKey = currentConversation?.uuid || currentFileUuid || null;
+  const handleBranchStateChange = useCallback((nextState) => {
+    setCurrentBranchState({
+      ...nextState,
+      conversationUuid: activeBranchConversationKey
+    });
+  }, [activeBranchConversationKey]);
 
   // ==================== 事件处理函数 ====================
 
@@ -2240,7 +2249,11 @@ function App() {
                     onClick={() => {
                       const newScope = exportOptions.scope === 'currentBranch' ? 'allBranches' : 'currentBranch';
                       setExportOptions(prev => ({ ...prev, scope: newScope }));
-                      setCurrentBranchState(prev => ({ ...prev, showAllBranches: newScope === 'allBranches' }));
+                      setCurrentBranchState(prev => ({
+                        ...prev,
+                        showAllBranches: newScope === 'allBranches',
+                        conversationUuid: activeBranchConversationKey
+                      }));
                     }}
                   >
                     {label}
@@ -2329,7 +2342,7 @@ function App() {
                 }}
                 searchQuery={searchQuery}
                 branchState={currentBranchState}
-                onBranchStateChange={setCurrentBranchState}
+                onBranchStateChange={handleBranchStateChange}
                 onDisplayMessagesChange={setTimelineDisplayMessages}
                 onRename={handleItemRename}
                 exportContext={pendingExportContext}
