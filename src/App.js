@@ -26,7 +26,8 @@ import { getGlobalSearchManager } from './utils/globalSearchManager';
 import { getRenameManager } from './utils/data/renameManager.js';
 import { prepareMarkdownExport, downloadMarkdownExport } from './utils/markdownExporter';
 import { pdfExportManager } from './utils/export/pdfExportManager';
-import { useI18n, setResolvedLang } from './index.js';
+import { useI18n } from './index.js';
+import { isTrustedViewerBridgeEvent, parseViewerBridgeHash, postViewerBridgeMessage } from './utils/viewerBridge.js';
 
 
 // ==================== 筛选 Hook ====================
@@ -1928,74 +1929,73 @@ function App() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Userscript 模式：监听 postMessage（静态 React App 作为 Viewer）
+  // Userscript 模式：只接受 URL hash 中声明并通过 allowlist 验证的 opener。
   useEffect(() => {
     if (isExtension) return;
 
+    const bridgeContext = parseViewerBridgeHash(window.location.hash);
+    const openerWindow = window.opener;
+    if (!bridgeContext || !openerWindow) return;
+
     const handleMessage = async (event) => {
+      if (!isTrustedViewerBridgeEvent(event, bridgeContext, openerWindow)) return;
+
       const { data } = event;
-      if (!data || typeof data !== 'object') return;
+      if (data.type !== 'LOOMINARY_LOAD_DATA') return;
 
-      // 响应握手：告知 Userscript 页面已就绪，同时附带保存的导出配置（供 userscript 同步）
-      if (data.type === 'LOOMINARY_HANDSHAKE') {
-        const savedConfig = StorageManager.get('export-config', {});
-        event.source?.postMessage({ type: 'LOOMINARY_READY', config: savedConfig }, event.origin);
-        return;
-      }
+      // Always process — allow tab reuse through an authenticated bridge session.
+      dataLoadedRef.current = true;
 
-      // 接收数据
-      if (data.type === 'LOOMINARY_LOAD_DATA') {
-        // Always process — allow tab reuse (don't guard with dataLoadedRef)
-        dataLoadedRef.current = true;
+      const payload = data.data;
+      if (!payload) return;
 
-        const payload = data.data;
-        if (!payload) return;
+      // Viewer language and theme are persistent viewer preferences. A source
+      // website cannot overwrite them when opening a conversation.
+      setBrowseAllCardsRef.current([]);
+      setBrowseAllCurrentIndexRef.current(null);
 
-        // Apply lang and theme from payload
-        if (payload.lang) setResolvedLang(payload.lang);
-        if (payload.theme) {
-          document.documentElement.setAttribute('data-theme', payload.theme);
-          StorageManager.set('app-theme', payload.theme);
+      try {
+        if (payload.files && Array.isArray(payload.files)) {
+          const fileObjs = payload.files.map(({ content, filename }) => {
+            const blob = new Blob(
+              [typeof content === 'string' ? content : JSON.stringify(content)],
+              { type: 'application/jsonl' }
+            );
+            return new File([blob], filename, { type: 'application/jsonl', lastModified: Date.now() });
+          });
+          await fileActionsRef.current.loadMergedJSONLFiles(fileObjs);
+          switchToTimelineRef.current(0, null);
+        } else {
+          const { content, filename } = payload;
+          const jsonData = typeof content === 'string' ? content : JSON.stringify(content);
+          const blob = new Blob([jsonData], { type: 'application/json' });
+          const file = new File([blob], filename, { type: 'application/json', lastModified: Date.now() });
+          const result = await fileActionsRef.current.loadFiles([file], { replace: true, activate: true });
+          try {
+            StorageManager.set('singlefile_session', { content: jsonData, filename });
+          } catch (_) {}
+          if (result?.firstIndex >= 0) {
+            switchToTimelineRef.current(result.firstIndex, null);
+          }
         }
 
-        // Reset previously loaded state so new data replaces old
-        setBrowseAllCardsRef.current([]);
-        setBrowseAllCurrentIndexRef.current(null);
-
-        try {
-          if (payload.files && Array.isArray(payload.files)) {
-            // 多文件（ST 分支模式）
-            const fileObjs = payload.files.map(({ content, filename }) => {
-              const blob = new Blob([typeof content === 'string' ? content : JSON.stringify(content)], { type: 'application/jsonl' });
-              return new File([blob], filename, { type: 'application/jsonl', lastModified: Date.now() });
-            });
-            await fileActionsRef.current.loadMergedJSONLFiles(fileObjs);
-          } else {
-            // 单文件
-            const { content, filename } = payload;
-            const jsonData = typeof content === 'string' ? content : JSON.stringify(content);
-            const blob = new Blob([jsonData], { type: 'application/json' });
-            const file = new File([blob], filename, { type: 'application/json', lastModified: Date.now() });
-            const result = await fileActionsRef.current.loadFiles([file], { replace: true, activate: true });
-            try { StorageManager.set('singlefile_session', { content: jsonData, filename }); } catch (_) {}
-            if (result?.firstIndex >= 0) {
-              switchToTimelineRef.current(result.firstIndex, null);
-            }
-          }
-          if (payload.files && Array.isArray(payload.files)) {
-            switchToTimelineRef.current(0, null);
-          }
-          if (payload.exportContext) {
-            setPendingExportContext(payload.exportContext);
-          }
-        } catch (err) {
-          console.error('[Loominary] postMessage load failed:', err);
-          setErrorRef.current('Failed to load data: ' + err.message);
+        if (payload.exportContext) {
+          setPendingExportContext(payload.exportContext);
         }
+      } catch (err) {
+        console.error('[Loominary] bridge load failed:', err);
+        setErrorRef.current('Failed to load data: ' + err.message);
       }
     };
 
     window.addEventListener('message', handleMessage);
+
+    const savedConfig = StorageManager.get('export-config', {});
+    postViewerBridgeMessage({
+      type: 'LOOMINARY_READY',
+      config: savedConfig
+    }, bridgeContext);
+
     return () => window.removeEventListener('message', handleMessage);
   }, [isExtension]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2037,16 +2037,9 @@ function App() {
     };
 
     // 检查是否有待处理的数据，同时加载 content script 面板保存的导出设置
-    chrome.storage.local.get(['loominary_pending_data', 'loominary_export_config', 'loominary_lang', 'loominary_page_theme'], (result) => {
+    chrome.storage.local.get(['loominary_pending_data', 'loominary_export_config'], (result) => {
       // 应用从 content script 面板保存的导出设置
       applyExtensionConfig(result.loominary_export_config);
-
-      // 应用语言和页面主题
-      if (result.loominary_lang) setResolvedLang(result.loominary_lang);
-      if (result.loominary_page_theme) {
-        document.documentElement.setAttribute('data-theme', result.loominary_page_theme);
-        StorageManager.set('app-theme', result.loominary_page_theme);
-      }
 
       if (result.loominary_pending_data) {
         const pendingData = result.loominary_pending_data;
