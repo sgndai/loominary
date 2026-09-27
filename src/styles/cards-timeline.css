@@ -940,6 +940,46 @@
   color: var(--text-tertiary);
 }
 
+.message-version-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  width: fit-content;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.message-version-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.message-version-arrow:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.message-version-arrow:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.message-version-count {
+  min-width: 34px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .sort-position {
   font-size: 0.85rem;
   color: var(--accent-primary);
