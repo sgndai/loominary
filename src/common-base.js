@@ -121,6 +121,20 @@
         };
         // #endplatform
 
+        const getInitialExporterLanguage = () => {
+            const legacy = localStorage.getItem('exporterLanguage');
+            const fallback = legacy === 'en' || legacy === 'zh' ? legacy : 'zh';
+
+            if (typeof LOOMINARY_ENV !== 'undefined' && LOOMINARY_ENV === 'userscript' &&
+                typeof GM_getValue === 'function' && typeof GM_setValue === 'function') {
+                const shared = GM_getValue('loominary_language', null);
+                if (shared === 'en' || shared === 'zh') return shared;
+                GM_setValue('loominary_language', fallback);
+            }
+
+            return fallback;
+        };
+
         const i18n = {
             languages: {
                 zh: {
@@ -176,11 +190,16 @@
                     exportCancelled: 'Export cancelled',
                 }
             },
-            currentLang: localStorage.getItem('exporterLanguage') || (navigator.language.startsWith('zh') ? 'zh' : 'en'),
+            currentLang: getInitialExporterLanguage(),
             t: (key) => i18n.languages[i18n.currentLang]?.[key] || key,
             setLanguage: (lang) => {
+                if (lang !== 'zh' && lang !== 'en') return;
                 i18n.currentLang = lang;
                 localStorage.setItem('exporterLanguage', lang);
+                if (typeof LOOMINARY_ENV !== 'undefined' && LOOMINARY_ENV === 'userscript' &&
+                    typeof GM_setValue === 'function') {
+                    GM_setValue('loominary_language', lang);
+                }
                 if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
                     chrome.storage.local.set({ loominary_lang: lang });
                 }
