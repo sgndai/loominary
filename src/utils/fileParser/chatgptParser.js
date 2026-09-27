@@ -59,6 +59,67 @@ const applyContentReferences = (text, metadata) => {
   return result;
 };
 
+const REDACTED_PLACEHOLDERS = new Set([
+  'The output of this plugin was redacted.'
+]);
+
+const extractPartText = (part) => {
+  if (typeof part === 'string') return part;
+  if (!part || typeof part !== 'object') return '';
+  if (typeof part.text === 'string') return part.text;
+  if (typeof part.content === 'string') return part.content;
+  return '';
+};
+
+const extractContentText = (content = {}) => {
+  if (Array.isArray(content.parts)) {
+    return content.parts.map(extractPartText).filter(Boolean).join('');
+  }
+  if (typeof content.content === 'string') return content.content;
+  if (typeof content.text === 'string') return content.text;
+  return '';
+};
+
+const isAssistantTechnicalNode = (msg, rawText) => {
+  const content = msg.content || {};
+  const contentType = content.content_type || '';
+  const metadata = msg.metadata || {};
+  const recipient = msg.recipient;
+
+  if (metadata.is_thinking_preamble_message === true) return true;
+  if (msg.channel === 'commentary') return true;
+  if (recipient && recipient !== 'all') return true;
+  if ([
+    'model_editable_context',
+    'thoughts',
+    'reasoning_recap',
+    'code',
+    'tether_browsing_search_result',
+    'tool_result',
+    'execution_output'
+  ].includes(contentType)) return true;
+  if (REDACTED_PLACEHOLDERS.has(String(rawText || '').trim())) return true;
+  return false;
+};
+
+const cloneTraversalState = (state) => ({
+  pendingThinking: state.pendingThinking,
+  pendingTools: state.pendingTools.map(tool => ({ ...tool })),
+  pendingRecap: state.pendingRecap,
+  pendingAttachments: [...state.pendingAttachments],
+  pendingAssistantGeneratedImages: [...state.pendingAssistantGeneratedImages],
+  lastUserMessage: state.lastUserMessage
+});
+
+const createTraversalState = () => ({
+  pendingThinking: '',
+  pendingTools: [],
+  pendingRecap: '',
+  pendingAttachments: [],
+  pendingAssistantGeneratedImages: [],
+  lastUserMessage: null
+});
+
 // ==================== ChatGPT 解析器 ====================
 /**
  * 解析 ChatGPT 对话导出格式
@@ -92,22 +153,6 @@ export const extractChatGPTData = (jsonData, fileName = '') => {
 
     // 保存 nodeId 到消息对象的映射，便于设置 parent_uuid
     const nodeIdToMessage = new Map();
-    let lastUserMessage = null;
-
-    // 用于缓存当前助手消息的思考内容和工具调用
-    let pendingThinking = '';
-    let pendingTools = [];
-    // 用于缓存assistant消息的推理概要内容（reasoning_recap）。
-    // reasoning_recap 通常只是表示"已思考X秒"等信息，不应该单独生成消息，否则会导致分支预览显示该概要内容。
-    // 我们在生成最终输出消息时，将其作为前缀添加到display_text中。
-    let pendingRecap = '';
-
-    // 用于缓存由工具产生的附件。这些附件应在下一条助手最终输出消息上附加。
-    // 部分工具（如 python_user_visible、web.run 等）会在 tool 消息的 metadata.attachments 中提供文件列表。
-    let pendingAttachments = [];
-    
-    // 用于缓存助手生成的图片（关联到用户消息的 assistant_generated）
-    let pendingAssistantGeneratedImages = [];
 
     /**
      * 寻找某节点祖先链上最近的已生成消息，用于确定 parent_uuid
@@ -171,10 +216,13 @@ export const extractChatGPTData = (jsonData, fileName = '') => {
       return null;
     };
 
-    // 递归遍历节点，深度优先
-    const traverse = (nodeId) => {
+    // 递归遍历节点，深度优先。每个 raw 分支拥有独立的解析状态，
+    // 防止 retry/edit 分支之间串入 thinking、tool、attachment 等数据。
+    const traverse = (nodeId, incomingState) => {
       const node = mapping[nodeId];
       if (!node) return;
+
+      const state = cloneTraversalState(incomingState);
       const msg = node.message;
 
       // 当 message 存在时才处理消息内容，但无论如何都要遍历子节点
@@ -183,286 +231,250 @@ export const extractChatGPTData = (jsonData, fileName = '') => {
         const role = author.role;
         const metadata = msg.metadata || {};
 
-        // 如果该消息被标记为对话中隐藏，则跳过对话解析，但仍需遍历子节点
-        if (metadata && metadata.is_visually_hidden_from_conversation) {
-          if (node.children && Array.isArray(node.children)) {
-            node.children.forEach(childId => traverse(childId));
-          }
-          return;
-        }
-
-        // === 系统消息：用于把附件附加到最近的用户消息 ===
-        if (role === 'system') {
-          if (!metadata?.is_visually_hidden_from_conversation && Array.isArray(metadata?.attachments) && lastUserMessage) {
-            processAttachments(metadata.attachments).forEach(att => {
-              lastUserMessage.attachments.push(att);
-            });
-          }
-        }
-        // === 用户消息 ===
-        else if (role === 'user') {
-          // 新一轮用户消息开始，重置 pendingThinking、pendingTools、pendingRecap
-          pendingThinking = '';
-          pendingTools = [];
-          pendingRecap = '';
-
-          const uuid = msg.id || nodeId;
-          let parentUuid = findNearestMessageUuid(node.parent);
-          if (!parentUuid) parentUuid = ROOT_UUID;
-          const timestamp = msg.create_time ? DateTimeUtils.formatDateTime(new Date(msg.create_time * 1000).toISOString()) : '';
-
-          // 处理用户文本内容
-          const content = msg.content || {};
-          const contentType = content.content_type || '';
-          let rawText = '';
-          if (contentType === 'text') {
-            rawText = Array.isArray(content.parts) ? content.parts.join('') : (content.content || '');
-          } else {
-            rawText = content.content || (Array.isArray(content.parts) ? content.parts.join('') : '');
-          }
-
-          // 替换 content_references 引用
-          rawText = applyContentReferences(rawText, metadata);
-
-          const messageData = new MessageBuilder(messageIndex++, uuid, parentUuid, 'human', 'User', timestamp)
-            .setContent(rawText)
-            .addCitations(metadata)
-            .addAttachments(metadata)
-            .finalize(true);
-
-          messageData._node_id = nodeId;
-
-          // 处理 Loominary 导出的图片数据
-          if (node.loominary_images) {
-            if (Array.isArray(node.loominary_images.user)) {
-              messageData.attachments = messageData.attachments.filter(att => !att.is_embedded_image);
-              node.loominary_images.user.forEach((img, idx) => {
-                const attachment = processLoominaryImage(img, idx, 'user_image');
-                if (attachment) {
-                  messageData.attachments.push(attachment);
-                  metaInfo.has_embedded_images = true;
-                  metaInfo.images_processed = (metaInfo.images_processed || 0) + 1;
-                }
+        // 如果该消息被标记为对话中隐藏，则跳过对话解析，但仍需沿当前 raw 路径继续。
+        if (!metadata.is_visually_hidden_from_conversation) {
+          if (role === 'system') {
+            if (Array.isArray(metadata.attachments) && state.lastUserMessage) {
+              processAttachments(metadata.attachments).forEach(att => {
+                state.lastUserMessage.attachments.push(att);
               });
             }
-            if (Array.isArray(node.loominary_images.assistant_generated)) {
-              pendingAssistantGeneratedImages = node.loominary_images.assistant_generated;
-            }
-          }
+          } else if (role === 'user') {
+            // 新一轮用户消息开始，assistant 辅助状态全部清空。
+            state.pendingThinking = '';
+            state.pendingTools = [];
+            state.pendingRecap = '';
+            state.pendingAttachments = [];
+            state.pendingAssistantGeneratedImages = [];
 
-          chatHistory.push(messageData);
-          nodeIdToMessage.set(nodeId, messageData);
-          lastUserMessage = messageData;
-        }
-        // === 助手消息 ===
-        else if (role === 'assistant') {
-          const content = msg.content || {};
-          const contentType = content.content_type || '';
-
-          // 遇到 model_editable_context：重置 pending 状态并跳过生成
-          if (contentType === 'model_editable_context') {
-            pendingThinking = '';
-            pendingTools = [];
-            pendingRecap = '';
-          }
-          // 累积思考内容
-          else if (contentType === 'thoughts' && content.thoughts) {
-            const joined = content.thoughts.map(th => {
-              let s = '';
-              if (th.summary) s += th.summary + '\n';
-              if (th.content) s += th.content;
-              return s.trim();
-            }).join('\n\n');
-            pendingThinking = pendingThinking ? pendingThinking + '\n\n' + joined : joined;
-          }
-          // code: 可能是工具调用
-          else if (contentType === 'code') {
-            const tool = parseToolFromCode(msg);
-            if (tool) {
-              pendingTools.push(tool);
-            }
-          }
-          // 工具结果：tether_browsing_search_result 或 tool_result
-          else if (contentType === 'tether_browsing_search_result' || contentType === 'tool_result') {
-            try {
-              const resultObj = typeof content === 'object' ? content : {};
-              if (pendingTools.length > 0) {
-                pendingTools[pendingTools.length - 1].result = resultObj;
-              } else {
-                pendingTools.push({ name: 'tool', input: {}, result: resultObj });
-              }
-            } catch (e) {
-              // 忽略错误
-            }
-          }
-          // reasoning_recap：保存到 pendingRecap，不生成单独消息
-          else if (contentType === 'reasoning_recap') {
-            let recapText = '';
-            if (Array.isArray(content.parts)) {
-              recapText = content.parts.join('');
-            } else if (typeof content.content === 'string') {
-              recapText = content.content;
-            } else if (content.text) {
-              recapText = content.text;
-            }
-            pendingRecap = recapText.trim();
-          }
-          // 其他：当成最终输出生成一条助手消息
-          else {
             const uuid = msg.id || nodeId;
             let parentUuid = findNearestMessageUuid(node.parent);
             if (!parentUuid) parentUuid = ROOT_UUID;
-            const timestamp = msg.create_time ? DateTimeUtils.formatDateTime(new Date(msg.create_time * 1000).toISOString()) : '';
+            const timestamp = msg.create_time
+              ? DateTimeUtils.formatDateTime(new Date(msg.create_time * 1000).toISOString())
+              : '';
 
-            // 处理文本内容
-            let rawText = '';
-            let imageAttachment = null;
-            if (contentType === 'text' || contentType === 'code') {
-              rawText = Array.isArray(content.parts) ? content.parts.join('') : (content.content || content.text || '');
-            } else if (contentType === 'image_file') {
-              const fileId = content.file_id || content.fileID || '';
-              const fileName = content.name || content.file_name || 'image';
-              imageAttachment = {
-                id: fileId,
-                file_name: fileName,
-                file_size: content.size || 0,
-                file_type: content.mimeType || 'image/png',
-                extracted_content: '',
-                link: fileId || '',
-                has_link: !!fileId
-              };
-              rawText = `[图片: ${fileName}]`;
-            } else {
-              try { rawText = JSON.stringify(content); } catch (e) { rawText = ''; }
-            }
-
-            // 替换 content_references 引用
+            let rawText = extractContentText(msg.content || {});
             rawText = applyContentReferences(rawText, metadata);
 
-            const messageData = new MessageBuilder(messageIndex++, uuid, parentUuid, 'assistant', 'ChatGPT', timestamp)
+            const messageData = new MessageBuilder(messageIndex++, uuid, parentUuid, 'human', 'User', timestamp)
               .setContent(rawText)
-              .setThinking(pendingThinking)
               .addCitations(metadata)
               .addAttachments(metadata)
-              .addTools(pendingTools.map(t => ({ ...t })))
-              .finalize(false);
+              .finalize(true);
 
             messageData._node_id = nodeId;
-            if (imageAttachment) messageData.attachments.unshift(imageAttachment);
-            if (pendingAttachments.length > 0) {
-              messageData.attachments.push(...pendingAttachments);
-              pendingAttachments = [];
-            }
-            
-            // 处理之前缓存的助手生成图片
-            if (pendingAssistantGeneratedImages.length > 0) {
-              pendingAssistantGeneratedImages.forEach((img, idx) => {
-                const attachment = processLoominaryImage(img, idx, 'generated');
-                if (attachment) {
-                  messageData.attachments.push(attachment);
-                  metaInfo.has_embedded_images = true;
-                  metaInfo.images_processed = (metaInfo.images_processed || 0) + 1;
-                }
-              });
-              pendingAssistantGeneratedImages = [];
-            }
 
-            // 处理 Loominary 导出的助手图片数据
-            if (node.loominary_images && Array.isArray(node.loominary_images.assistant)) {
-              messageData.attachments = messageData.attachments.filter(att => !att.is_embedded_image);
-              node.loominary_images.assistant.forEach((img, idx) => {
-                const attachment = processLoominaryImage(img, idx, 'assistant_image');
-                if (attachment) {
-                  messageData.attachments.push(attachment);
-                  metaInfo.has_embedded_images = true;
-                  metaInfo.images_processed = (metaInfo.images_processed || 0) + 1;
-                }
-              });
+            if (node.loominary_images) {
+              if (Array.isArray(node.loominary_images.user)) {
+                messageData.attachments = messageData.attachments.filter(att => !att.is_embedded_image);
+                node.loominary_images.user.forEach((img, idx) => {
+                  const attachment = processLoominaryImage(img, idx, 'user_image');
+                  if (attachment) {
+                    messageData.attachments.push(attachment);
+                    metaInfo.has_embedded_images = true;
+                    metaInfo.images_processed = (metaInfo.images_processed || 0) + 1;
+                  }
+                });
+              }
+              if (Array.isArray(node.loominary_images.assistant_generated)) {
+                state.pendingAssistantGeneratedImages = [...node.loominary_images.assistant_generated];
+              }
             }
 
             chatHistory.push(messageData);
             nodeIdToMessage.set(nodeId, messageData);
-          }
-        }
-        // === 工具消息 ===
-        else if (role === 'tool') {
-          const toolName = author.name || '';
-          const groups = metadata?.search_result_groups;
-          if (Array.isArray(groups)) {
-            // 重新整理 search_result_groups：缺失 domain 的根据 URL 提取并分组
-            const domainMap = {};
-            groups.forEach(grp => {
-              const entries = Array.isArray(grp.entries) ? grp.entries : [];
-              if (grp && grp.domain && String(grp.domain).trim()) {
-                const dom = String(grp.domain).trim();
-                if (!domainMap[dom]) domainMap[dom] = [];
-                entries.forEach(entry => {
-                  domainMap[dom].push({
-                    url: entry.url || '',
-                    title: entry.title || '',
-                    snippet: entry.snippet || '',
-                    pub_date: entry.pub_date || null,
-                    attribution: entry.attribution || ''
-                  });
-                });
-              } else {
-                // 无 domain，从每个条目的 url 中解析域名分组
-                entries.forEach(entry => {
-                  const url = entry.url || '';
-                  let dom = '';
-                  const match = typeof url === 'string' && url.match(/^(?:https?:\/\/)?([^\/]+)/i);
-                  if (match) dom = match[1] || '';
-                  if (!domainMap[dom]) domainMap[dom] = [];
-                  domainMap[dom].push({
-                    url: entry.url || '',
-                    title: entry.title || '',
-                    snippet: entry.snippet || '',
-                    pub_date: entry.pub_date || null,
-                    attribution: entry.attribution || ''
-                  });
-                });
+            state.lastUserMessage = messageData;
+          } else if (role === 'assistant') {
+            const content = msg.content || {};
+            const contentType = content.content_type || '';
+
+            if (contentType === 'model_editable_context') {
+              state.pendingThinking = '';
+              state.pendingTools = [];
+              state.pendingRecap = '';
+              state.pendingAttachments = [];
+            } else if (contentType === 'thoughts' && Array.isArray(content.thoughts)) {
+              const joined = content.thoughts.map(th => {
+                let value = '';
+                if (th?.summary) value += th.summary + '\n';
+                if (th?.content) value += th.content;
+                return value.trim();
+              }).filter(Boolean).join('\n\n');
+              if (joined) {
+                state.pendingThinking = state.pendingThinking
+                  ? state.pendingThinking + '\n\n' + joined
+                  : joined;
               }
-            });
-            // 构建去重后的分组数组
-            const mappedGroups = Object.keys(domainMap).map(dom => ({
-              domain: dom || '',
-              entries: domainMap[dom]
-            }));
-            // 提取模型查询语句
-            let queries = [];
-            if (metadata?.search_model_queries && Array.isArray(metadata.search_model_queries.queries)) {
-              queries = metadata.search_model_queries.queries.map(q => q.q || q);
-            }
-
-            if (pendingTools.length > 0) {
-              const lastTool = pendingTools[pendingTools.length - 1];
-              lastTool.result = lastTool.result || {};
-              lastTool.result.groups = mappedGroups;
-              if (queries.length > 0) lastTool.result.queries = queries;
+            } else if (contentType === 'code') {
+              const tool = parseToolFromCode(msg);
+              if (tool) state.pendingTools.push(tool);
+            } else if (contentType === 'tether_browsing_search_result' || contentType === 'tool_result') {
+              const resultObj = typeof content === 'object' ? content : {};
+              if (state.pendingTools.length > 0) {
+                state.pendingTools[state.pendingTools.length - 1].result = resultObj;
+              } else {
+                state.pendingTools.push({ name: 'tool', input: {}, result: resultObj });
+              }
+            } else if (contentType === 'reasoning_recap') {
+              state.pendingRecap = extractContentText(content).trim();
             } else {
-              const resultObj = { groups: mappedGroups };
-              if (queries.length > 0) resultObj.queries = queries;
-              pendingTools.push({ name: toolName || 'tool', input: {}, result: resultObj });
+              let rawText = extractContentText(content);
+              let imageAttachment = null;
+
+              if (contentType === 'image_file') {
+                const fileId = content.file_id || content.fileID || '';
+                const fileName = content.name || content.file_name || 'image';
+                imageAttachment = {
+                  id: fileId,
+                  file_name: fileName,
+                  file_size: content.size || 0,
+                  file_type: content.mimeType || 'image/png',
+                  extracted_content: '',
+                  link: fileId || '',
+                  has_link: !!fileId
+                };
+                if (!rawText) rawText = `[图片: ${fileName}]`;
+              }
+
+              rawText = applyContentReferences(rawText, metadata);
+              const hasRenderablePayload = !!(
+                rawText.trim() ||
+                imageAttachment ||
+                (Array.isArray(metadata.attachments) && metadata.attachments.length > 0) ||
+                (node.loominary_images && Array.isArray(node.loominary_images.assistant) && node.loominary_images.assistant.length > 0)
+              );
+
+              if (!isAssistantTechnicalNode(msg, rawText) && hasRenderablePayload) {
+                const uuid = msg.id || nodeId;
+                let parentUuid = findNearestMessageUuid(node.parent);
+                if (!parentUuid) parentUuid = ROOT_UUID;
+                const timestamp = msg.create_time
+                  ? DateTimeUtils.formatDateTime(new Date(msg.create_time * 1000).toISOString())
+                  : '';
+
+                const messageData = new MessageBuilder(messageIndex++, uuid, parentUuid, 'assistant', 'ChatGPT', timestamp)
+                  .setContent(rawText)
+                  .setThinking(state.pendingThinking)
+                  .addCitations(metadata)
+                  .addAttachments(metadata)
+                  .addTools(state.pendingTools.map(tool => ({ ...tool })))
+                  .finalize(false);
+
+                messageData._node_id = nodeId;
+                if (state.pendingRecap) messageData.reasoning_recap = state.pendingRecap;
+                if (imageAttachment) messageData.attachments.unshift(imageAttachment);
+                if (state.pendingAttachments.length > 0) {
+                  messageData.attachments.push(...state.pendingAttachments);
+                }
+
+                if (state.pendingAssistantGeneratedImages.length > 0) {
+                  state.pendingAssistantGeneratedImages.forEach((img, idx) => {
+                    const attachment = processLoominaryImage(img, idx, 'generated');
+                    if (attachment) {
+                      messageData.attachments.push(attachment);
+                      metaInfo.has_embedded_images = true;
+                      metaInfo.images_processed = (metaInfo.images_processed || 0) + 1;
+                    }
+                  });
+                }
+
+                if (node.loominary_images && Array.isArray(node.loominary_images.assistant)) {
+                  messageData.attachments = messageData.attachments.filter(att => !att.is_embedded_image);
+                  node.loominary_images.assistant.forEach((img, idx) => {
+                    const attachment = processLoominaryImage(img, idx, 'assistant_image');
+                    if (attachment) {
+                      messageData.attachments.push(attachment);
+                      metaInfo.has_embedded_images = true;
+                      metaInfo.images_processed = (metaInfo.images_processed || 0) + 1;
+                    }
+                  });
+                }
+
+                chatHistory.push(messageData);
+                nodeIdToMessage.set(nodeId, messageData);
+
+                // 已消费的 assistant 辅助状态不能继续泄漏到后续消息。
+                state.pendingThinking = '';
+                state.pendingTools = [];
+                state.pendingRecap = '';
+                state.pendingAttachments = [];
+                state.pendingAssistantGeneratedImages = [];
+              }
+            }
+          } else if (role === 'tool') {
+            const toolName = author.name || '';
+            const groups = metadata?.search_result_groups;
+            if (Array.isArray(groups)) {
+              const domainMap = {};
+              groups.forEach(grp => {
+                const entries = Array.isArray(grp.entries) ? grp.entries : [];
+                if (grp && grp.domain && String(grp.domain).trim()) {
+                  const dom = String(grp.domain).trim();
+                  if (!domainMap[dom]) domainMap[dom] = [];
+                  entries.forEach(entry => {
+                    domainMap[dom].push({
+                      url: entry.url || '',
+                      title: entry.title || '',
+                      snippet: entry.snippet || '',
+                      pub_date: entry.pub_date || null,
+                      attribution: entry.attribution || ''
+                    });
+                  });
+                } else {
+                  entries.forEach(entry => {
+                    const url = entry.url || '';
+                    let dom = '';
+                    const match = typeof url === 'string' && url.match(/^(?:https?:\/\/)?([^/]+)/i);
+                    if (match) dom = match[1] || '';
+                    if (!domainMap[dom]) domainMap[dom] = [];
+                    domainMap[dom].push({
+                      url: entry.url || '',
+                      title: entry.title || '',
+                      snippet: entry.snippet || '',
+                      pub_date: entry.pub_date || null,
+                      attribution: entry.attribution || ''
+                    });
+                  });
+                }
+              });
+
+              const mappedGroups = Object.keys(domainMap).map(dom => ({
+                domain: dom || '',
+                entries: domainMap[dom]
+              }));
+              let queries = [];
+              if (metadata?.search_model_queries && Array.isArray(metadata.search_model_queries.queries)) {
+                queries = metadata.search_model_queries.queries.map(q => q.q || q);
+              }
+
+              if (state.pendingTools.length > 0) {
+                const lastTool = state.pendingTools[state.pendingTools.length - 1];
+                lastTool.result = lastTool.result || {};
+                lastTool.result.groups = mappedGroups;
+                if (queries.length > 0) lastTool.result.queries = queries;
+              } else {
+                const resultObj = { groups: mappedGroups };
+                if (queries.length > 0) resultObj.queries = queries;
+                state.pendingTools.push({ name: toolName || 'tool', input: {}, result: resultObj });
+              }
+            }
+
+            if (Array.isArray(metadata?.attachments)) {
+              state.pendingAttachments.push(...processAttachments(metadata.attachments));
             }
           }
-
-          // 工具产生的附件暂存到 pendingAttachments
-          if (Array.isArray(metadata?.attachments)) {
-            pendingAttachments.push(...processAttachments(metadata.attachments));
-          }
-          // 工具消息不生成可见消息
         }
       }
 
-      // 递归子节点
       if (node.children && Array.isArray(node.children)) {
-        node.children.forEach(childId => traverse(childId));
+        node.children.forEach(childId => traverse(childId, state));
       }
     };
 
     // 按根节点顺序遍历
     rootNodeIds.forEach(rootId => {
-      traverse(rootId);
+      traverse(rootId, createTraversalState());
     });
 
     const processed = {
