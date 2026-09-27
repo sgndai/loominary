@@ -7,6 +7,16 @@ jest.mock('../components/FloatingActionButton', () => () => null);
 jest.mock('../components/SearchOverlay', () => () => null);
 jest.mock('../components/UnifiedCard', () => ({ CardGrid: () => null }));
 jest.mock('../components/SettingsPanel', () => () => null);
+jest.mock('../utils/export/pdfExportManager', () => ({
+  pdfExportManager: { exportToPDF: jest.fn() }
+}));
+jest.mock('../utils/markdownExporter', () => ({
+  prepareMarkdownExport: jest.fn(),
+  downloadMarkdownExport: jest.fn()
+}));
+jest.mock('../utils/globalSearchManager', () => ({
+  getGlobalSearchManager: () => ({ buildGlobalIndex: jest.fn(() => Promise.resolve()) })
+}));
 jest.mock('../index.js', () => ({
   useI18n: () => ({ t: key => key }),
   setResolvedLang: jest.fn()
