@@ -294,9 +294,13 @@ def userscript_header(platforms: list[str], version: str) -> str:
 // @author       Laumss; sgndai fork
 // @homepage     https://github.com/sgndai/loominary
 // @supportURL   https://github.com/sgndai/loominary/issues
+// @updateURL    https://sgndai.github.io/loominary/loominary.user.js
+// @downloadURL  https://sgndai.github.io/loominary/loominary.user.js
 {match_lines}
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @grant        unsafeWindow
 // @run-at       document-start
 // @license      MIT
@@ -724,9 +728,14 @@ def run_checks() -> None:
 
     all_header = userscript_header(USERSCRIPT_PLATFORMS, version)
     chatgpt_header = userscript_header(["chatgpt"], version)
-    for forbidden in ("@downloadURL", "@updateURL", "Laumss/loominary/issues"):
+    for forbidden in ("Laumss/loominary/issues", "Laumss.github.io"):
         if forbidden in all_header:
             errors.append(f"Generated userscript header still contains {forbidden}")
+    expected_update = "https://sgndai.github.io/loominary/loominary.user.js"
+    if f"// @updateURL    {expected_update}" not in all_header:
+        errors.append("Generated userscript header is missing the sgndai updateURL")
+    if f"// @downloadURL  {expected_update}" not in all_header:
+        errors.append("Generated userscript header is missing the sgndai downloadURL")
     if "https://claude.ai/*" in chatgpt_header or "https://grok.com/*" in chatgpt_header:
         errors.append("Single-platform ChatGPT header contains another platform")
 
