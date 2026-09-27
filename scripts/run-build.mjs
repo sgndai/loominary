@@ -42,9 +42,11 @@ export function buildArtifactPaths(args) {
   }
   if (command === 'extension') return [path.join(root, 'chrome', 'content.js')];
   if (command === 'firefox') return [path.join(root, 'firefox', 'content.js')];
+  if (command === 'pages') return [path.join(root, 'dist', 'loominary.user.js')];
   if (command === 'all' || !command) {
     return [
       path.join(root, 'chrome', 'content.js'),
+      path.join(root, 'firefox', 'content.js'),
       path.join(root, 'dist', 'loominary.user.js')
     ];
   }
@@ -89,6 +91,18 @@ export function runBuild(args = process.argv.slice(2)) {
       const label = path.relative(root, artifact);
       console.log(`[Archive] ${changed ? 'Injected into' : 'Already present in'} ${label}`);
     }
+
+    const command = args[0] || 'all';
+    if (command === 'all' || command === 'pages') {
+      const userscript = path.join(root, 'dist', 'loominary.user.js');
+      const pagesUserscript = path.join(root, 'build', 'loominary.user.js');
+      if (!fs.existsSync(userscript) || !fs.existsSync(path.dirname(pagesUserscript))) {
+        throw new Error('Pages userscript publish inputs are missing');
+      }
+      fs.copyFileSync(userscript, pagesUserscript);
+      console.log('[Archive] Published injected userscript to build/loominary.user.js');
+    }
+
     return 0;
   } catch (error) {
     console.error(`[Archive] Build injection failed: ${error.message}`);
