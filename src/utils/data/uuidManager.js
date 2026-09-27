@@ -57,17 +57,16 @@ export const parseUuid = (uuid) => {
 /**
  * 获取当前文件的UUID
  */
-export const getCurrentFileUuid = (viewMode, selectedFileIndex, selectedConversationUuid, processedData, files) => {
-  if (viewMode === 'timeline' && selectedFileIndex !== null && files && files[selectedFileIndex]) {
-    const file = files[selectedFileIndex];
+export const getCurrentFileUuid = (viewMode, currentFileIndex, selectedConversationUuid, processedData, files) => {
+  if (viewMode === 'timeline' && files && files[currentFileIndex]) {
+    const file = files[currentFileIndex];
     const fileHash = generateFileHash(file);
-    
+
     if (selectedConversationUuid && processedData?.format === 'claude_full_export') {
       return `${fileHash}-${selectedConversationUuid}`;
-    } else {
-      return `file-${fileHash}`;
     }
+    return `file-${fileHash}`;
   }
-  
+
   return null;
 };
