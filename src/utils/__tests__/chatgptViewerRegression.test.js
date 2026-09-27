@@ -1,5 +1,5 @@
 import { extractChatGPTData, detectChatGPTBranches } from '../fileParser/chatgptParser';
-import { analyzeBranches, filterDisplayMessages, ROOT_UUID } from '../branchAnalysis';
+import { analyzeBranches, filterDisplayMessages, getMessageVersionInfo, ROOT_UUID } from '../branchAnalysis';
 
 function msg(id, role, text, parent, children = []) {
   return {
@@ -69,6 +69,9 @@ describe('ChatGPT viewer branch defaults', () => {
 
     const visible = filterDisplayMessages(processed.chat_history, new Map(), analysis, false);
     expect(visible.map(message => message._node_id)).toEqual(['user-current', 'assistant-current']);
+
+    const versionInfo = getMessageVersionInfo(byNode.get('user-current'), analysis, new Map());
+    expect(versionInfo).toMatchObject({ selectedIndex: 1, total: 2, isSelected: true });
   });
 
   test('uses current_node for regenerated assistant replies', () => {
