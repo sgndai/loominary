@@ -12,17 +12,50 @@ const TRANSLATIONS = {
   zh: zhTranslations,
 };
 
-const DEFAULT_LANG = 'en';
+const DEFAULT_LANG = 'zh';
+const VIEWER_LANGUAGE_KEY = 'loominary_language';
+
+function normalizeLanguage(lang) {
+  return TRANSLATIONS[lang] ? lang : null;
+}
+
+function readLegacyLocalLanguage() {
+  try {
+    for (const key of [VIEWER_LANGUAGE_KEY, 'loominary_lang', 'exporterLanguage']) {
+      const value = normalizeLanguage(localStorage.getItem(key));
+      if (value) return value;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function persistViewerLanguage(lang) {
+  const normalized = normalizeLanguage(lang);
+  if (!normalized) return DEFAULT_LANG;
+  try {
+    localStorage.setItem(VIEWER_LANGUAGE_KEY, normalized);
+  } catch (_) {}
+  return normalized;
+}
 
 // Language is read once from chrome.storage at startup (set there by the userscript)
 // setResolvedLang allows the App to switch language after a postMessage payload arrives.
 let resolvedLang = DEFAULT_LANG;
 let _langListeners = [];
 export function setResolvedLang(lang) {
-  const next = TRANSLATIONS[lang] ? lang : DEFAULT_LANG;
+  const next = normalizeLanguage(lang) || DEFAULT_LANG;
   if (next === resolvedLang) return;
   resolvedLang = next;
   _langListeners.forEach(fn => fn(next));
+}
+
+export function setViewerLanguage(lang) {
+  const next = persistViewerLanguage(lang);
+  setResolvedLang(next);
+}
+
+export function getViewerLanguage() {
+  return readLegacyLocalLanguage() || DEFAULT_LANG;
 }
 export function subscribeLang(fn) {
   _langListeners.push(fn);
@@ -82,10 +115,20 @@ function boot(lang) {
 // eslint-disable-next-line no-undef
 const chromeApi = typeof chrome !== 'undefined' ? chrome : null;
 
-if (chromeApi && chromeApi.storage && chromeApi.storage.local) {
+const storedViewerLanguage = readLegacyLocalLanguage();
+
+if (storedViewerLanguage) {
+  persistViewerLanguage(storedViewerLanguage);
+  boot(storedViewerLanguage);
+} else if (chromeApi && chromeApi.storage && chromeApi.storage.local) {
+  // One-time migration source for existing extension installs. The canonical
+  // preference thereafter lives in loominary_language.
   chromeApi.storage.local.get('loominary_lang', (result) => {
-    boot(result.loominary_lang || DEFAULT_LANG);
+    const migrated = normalizeLanguage(result.loominary_lang) || DEFAULT_LANG;
+    persistViewerLanguage(migrated);
+    boot(migrated);
   });
 } else {
+  persistViewerLanguage(DEFAULT_LANG);
   boot(DEFAULT_LANG);
 }
