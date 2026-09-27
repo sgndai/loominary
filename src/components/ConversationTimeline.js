@@ -2,18 +2,15 @@
 // 增强版时间线组件,整合了分支切换功能、复制功能和重命名功能
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import ReactDOM from 'react-dom';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import MessageDetail from './MessageDetail';
 import PlatformIcon, { inferJsonlModelKey } from './PlatformIcon';
-import { PlatformUtils, DateTimeUtils, TextUtils } from '../utils/fileParser';
+import { PlatformUtils, DateTimeUtils } from '../utils/fileParser';
 import { useI18n } from '../index.js';
 import { getRenameManager } from '../utils/data/renameManager.js';
 import StorageManager from '../utils/data/storageManager.js';
-import BranchSwitcher from './BranchSwitcher';
 import SystemContextCard from './SystemContextCard';
-import { analyzeBranches, filterDisplayMessages, ROOT_UUID, findMessageByLocator, computeBranchFiltersForMessage } from '../utils/branchAnalysis';
-import { Copy, ClipboardCheck, Star, Trash2, Pencil, ChevronsDown, RotateCcw, ChevronUp, ChevronDown, ChevronLeft, GitBranch, Filter, Image, Check, Search } from 'lucide-react';
+import { analyzeBranches, filterDisplayMessages, getMessageVersionInfo, findMessageByLocator, computeBranchFiltersForMessage } from '../utils/branchAnalysis';
+import { Copy, ClipboardCheck, Star, Trash2, Pencil, ChevronsDown, RotateCcw, ChevronUp, ChevronDown, ChevronLeft, Image, Check, Search } from 'lucide-react';
 
 const MOBILE_BREAKPOINT = 768;
 
@@ -27,28 +24,6 @@ function useIsMobile(breakpoint = MOBILE_BREAKPOINT) {
   }, [breakpoint]);
   return isMobile;
 }
-
-// 时间线预览卡片的 Markdown 渲染配置（模块级常量，避免每次渲染重新创建）
-const TIMELINE_MD_COMPONENTS = {
-  p: ({ children }) => <span>{children}</span>,
-  h1: ({ children }) => <strong>{children}</strong>,
-  h2: ({ children }) => <strong>{children}</strong>,
-  h3: ({ children }) => <strong>{children}</strong>,
-  h4: ({ children }) => <strong>{children}</strong>,
-  h5: ({ children }) => <strong>{children}</strong>,
-  h6: ({ children }) => <strong>{children}</strong>,
-  strong: ({ children }) => <strong>{children}</strong>,
-  em: ({ children }) => <em>{children}</em>,
-  code: ({ inline, children }) => inline ?
-    <code className="inline-code">{children}</code> :
-    <code>{children}</code>,
-  pre: ({ children }) => <span>{children}</span>,
-  blockquote: ({ children }) => <span>" {children} "</span>,
-  a: ({ children }) => <span>{children}</span>,
-  ul: ({ children }) => <span>{children}</span>,
-  ol: ({ children }) => <span>{children}</span>,
-  li: ({ children }) => <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '0.25em' }}><span>•</span><span>{children}</span></span>
-};
 
 // ==================== 重命名对话框组件 ====================
 const RenameDialog = ({
@@ -269,6 +244,7 @@ const ConversationTimeline = ({
   const branchStateKey = conversation?.uuid || data?.meta_info?.uuid || null;
   const [copiedMessageIndex, setCopiedMessageIndex] = useState(null);
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+  const [desktopDetailOpen, setDesktopDetailOpen] = useState(false);
 
   // 笔记管理
   const fileUuid = data?.meta_info?.uuid || null;
@@ -457,6 +433,7 @@ const ConversationTimeline = ({
     setBranchFilters(new Map());
     setShowAllBranches(false);
     setSelectedMessageIndex(null);
+    setDesktopDetailOpen(false);
   }, [branchStateKey]);
 
   // 新消息到来后 fade-in
@@ -743,14 +720,22 @@ const ConversationTimeline = ({
     setSelectedMessageIndex(messageIndex);
     setIsSystemContextSelected(false);
     setActiveTab('content');
-    if (isMobile) setMobileDetailOpen(true);
+    if (isMobile) {
+      setMobileDetailOpen(true);
+    } else {
+      setDesktopDetailOpen(true);
+    }
   };
 
   const handleSystemContextSelect = () => {
     setIsSystemContextSelected(true);
     setSelectedMessageIndex(null);
     setActiveTab('instructions');
-    if (isMobile) setMobileDetailOpen(true);
+    if (isMobile) {
+      setMobileDetailOpen(true);
+    } else {
+      setDesktopDetailOpen(true);
+    }
   };
 
   const handleNavigateMessage = (direction) => {
@@ -982,75 +967,67 @@ const ConversationTimeline = ({
   const platformClass = PlatformUtils.getPlatformClass(conversationInfo?.platform);
   const prevFilePreview = getFilePreview('prev');
   const nextFilePreview = getFilePreview('next');
-  const rootBranchData = branchAnalysis.branchPoints.get(ROOT_UUID);
 
   return (
     <div className={`enhanced-timeline-container ${platformClass} desktop-layout`}>
       <div className="timeline-main-content">
-        {/* 左侧时间线面板 */}
-        <div className="timeline-left-panel" ref={leftPanelRef} style={{ opacity: isTransitioning ? 0 : 1, transition: 'opacity 0.2s ease' }}>
-          {/* 文件切换预览 - 顶部 */}
-          {prevFilePreview && (
-            <div
-              className="file-preview file-preview-top"
-              onClick={() => onFileSwitch && onFileSwitch(prevFilePreview.index)}
-            >
-              <div className="file-preview-inner">
-                <ChevronUp size={24} className="file-preview-arrow" />
-                <span className="file-preview-name">{prevFilePreview.file.name}</span>
-                <span className="file-preview-hint">{t('timeline.file.clickToPrevious')}</span>
-              </div>
-            </div>
-          )}
-
-          {/* 对话信息卡片 */}
+        {/* 主阅读区 */}
+        <div className="timeline-left-panel reader-panel" ref={leftPanelRef} style={{ opacity: isTransitioning ? 0 : 1, transition: 'opacity 0.2s ease' }}>
           {conversationInfo && (
-            <div className={"conversation-info-card"}>
-              <h2>
-                {conversationInfo.name}
-                {conversationInfo.is_starred && <Star size={16} style={{ marginLeft: '6px', verticalAlign: 'middle', color: 'var(--accent-primary)' }} />}
-                <button
-                  className="btn-secondary small"
-                  onClick={handleOpenRename}
-                  title={t('rename.action')}
-                  style={{ marginLeft: '4px' }}
-                >
-                  <Pencil size={13} />
-                </button>
-              </h2>
-              <div className="info-grid">
-                <div className="info-item">
-                  <span className="info-label">{t('timeline.info.modelPlatform')}</span>
-                  <span className="info-value">{conversationInfo.model}</span>
-                </div>
-                <div className="info-item">
-                  <span className="info-label">{t('timeline.info.created')}</span>
-                  <span className="info-value">{conversationInfo.created_at}</span>
-                </div>
-                <div className="info-item">
-                  <span className="info-label">{t('timeline.info.displayedMessages')}</span>
-                  <span className="info-value">{conversationInfo.messageCount}</span>
-                </div>
-                <div className="info-item">
-                  <span className="info-label">{t('timeline.info.lastUpdated')}</span>
-                  <span className="info-value">{conversationInfo.updated_at}</span>
-                </div>
-              </div>
-              {/* 系统上下文卡片（从时间线移至此处） */}
-              <SystemContextCard
-                exportContext={exportContext}
-                isSelected={isSystemContextSelected}
-                onSelect={handleSystemContextSelect}
-              />
-              {/* 操作按钮行：跳转最新 + 重置标记 + 显示全部分支 */}
-              <div className="conversation-action-row">
-                {messages && messages.length > 0 && (
+            <div className="conversation-reader-header">
+              <div className="reader-title-row">
+                <div className="reader-title-main">
+                  <h2>
+                    {conversationInfo.name}
+                    {conversationInfo.is_starred && <Star size={15} className="reader-star" />}
+                  </h2>
                   <button
-                    className="btn-secondary small"
-                    onClick={handleJumpToLatest}
-                    title={t('timeline.actions.jumpToLatest')}
+                    className="reader-icon-button"
+                    onClick={handleOpenRename}
+                    title={t('rename.action')}
                   >
+                    <Pencil size={13} />
+                  </button>
+                </div>
+
+                {files.length > 1 && currentFileIndex !== null && (
+                  <div className="reader-file-nav" aria-label={t('timeline.file.navigation')}>
+                    <button
+                      className="reader-icon-button"
+                      onClick={() => prevFilePreview && onFileSwitch?.(prevFilePreview.index)}
+                      disabled={!prevFilePreview}
+                      title={t('timeline.file.clickToPrevious')}
+                    >
+                      <ChevronUp size={15} />
+                    </button>
+                    <span>{currentFileIndex + 1}/{files.length}</span>
+                    <button
+                      className="reader-icon-button"
+                      onClick={() => nextFilePreview && onFileSwitch?.(nextFilePreview.index)}
+                      disabled={!nextFilePreview}
+                      title={t('timeline.file.clickToNext')}
+                    >
+                      <ChevronDown size={15} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="reader-meta-row">
+                {conversationInfo.model && <span>{conversationInfo.model}</span>}
+                <span>{conversationInfo.messageCount} {t('timeline.branch.messages')}</span>
+                {conversationInfo.created_at && <span>{conversationInfo.created_at}</span>}
+              </div>
+
+              <div className="reader-header-actions">
+                {messages && messages.length > 0 && (
+                  <button className="btn-secondary small" onClick={handleJumpToLatest}>
                     <ChevronsDown size={13} /> {t('timeline.actions.jumpToLatest')}
+                  </button>
+                )}
+                {exportContext && (
+                  <button className="btn-secondary small" onClick={handleSystemContextSelect}>
+                    {t('timeline.actions.openContext')}
                   </button>
                 )}
                 {markActions && (
@@ -1061,218 +1038,163 @@ const ConversationTimeline = ({
                         markActions.clearAllMarks();
                       }
                     }}
-                    title={t('timeline.actions.clearAllMarks')}
                   >
                     <RotateCcw size={13} /> {t('timeline.actions.resetMarks')}
                   </button>
                 )}
-                {branchAnalysis.branchPoints.size > 0 && (
-                  <button
-                    className="btn-secondary small"
-                    onClick={handleShowAllBranches}
-                    title={showAllBranches ? t('timeline.branch.showSelectedOnly') : t('timeline.branch.showAllBranches')}
-                  >
-                    {showAllBranches ? <><Filter size={13} /> {t('timeline.branch.filterBranches')}</> : <><GitBranch size={13} /> {t('timeline.branch.showAll')}</>}
-                  </button>
-                )}
               </div>
             </div>
           )}
 
-          {/* 时间线 */}
-          <div className="timeline">
+          <div className="timeline reader-timeline">
             <div className="timeline-line"></div>
 
-
-            {/* 根分支切换器（第一条消息就有分支的情况） */}
-            {rootBranchData && rootBranchData.branches.length > 1 && !showAllBranches && (
-              <div className="root-branch-container">
-                <div className="root-branch-label">
-                  <span className="label-text">{t('timeline.branch.detected')} {branchAnalysis.branchPoints.size} {t('timeline.branch.branchPoints')}</span>
-                </div>
-                <BranchSwitcher
-                  key={`branch-${ROOT_UUID}`}
-                  branchPoint={rootBranchData.branchPoint}
-                  availableBranches={rootBranchData.branches}
-                  currentBranchIndex={branchFilters.get(ROOT_UUID) ?? rootBranchData.currentBranchIndex}
-                  onBranchChange={(newIndex) => handleBranchSwitch(ROOT_UUID, newIndex)}
-                  onShowAllBranches={handleShowAllBranches}
-                  showAllMode={false}
-                  className="timeline-branch-switcher"
-                />
-              </div>
-            )}
-
             {displayMessages.map((msg, index) => {
-              const branchData = branchAnalysis.branchPoints.get(msg.uuid);
-              // 图片：合并 images 数组与 attachments 中的嵌入图片（含 Grok 兼容）
+              const versionInfo = getMessageVersionInfo(msg, branchAnalysis, branchFilters);
               const embeddedImages = msg.attachments?.filter(att =>
                 att.is_embedded_image || (format === 'grok' && att.file_type?.startsWith('image/'))
               ) || [];
               const totalImages = (msg.images?.length || 0) + embeddedImages.length;
-              // 附件：排除嵌入图片，只保留真实附件（含 Grok 兼容）
               const regularAttachments = msg.attachments?.filter(att =>
                 !att.is_embedded_image && !(format === 'grok' && att.file_type?.startsWith('image/'))
               ) || [];
-              const shouldShowBranchSwitcher = branchData &&
-                branchData.branches.length > 1 &&
-                !showAllBranches;
+
+              const changeVersion = (delta) => {
+                if (!versionInfo) return;
+                const nextIndex = versionInfo.selectedIndex + delta;
+                if (nextIndex < 0 || nextIndex >= versionInfo.total) return;
+                handleBranchSwitch(versionInfo.branchPointUuid, nextIndex);
+              };
 
               return (
-                <React.Fragment key={msg.uuid || index}>
-                  {/* 消息项 */}
-                  <div
-                    className="timeline-message"
-                    ref={(el) => { if (el) messageRefs.current[msg.index] = el; }}
-                  >
-                    <div className={`timeline-dot ${msg.sender === 'human' ? 'human' : 'assistant'}`}></div>
+                <div
+                  className="timeline-message reader-message"
+                  key={msg.uuid || index}
+                  ref={(el) => { if (el) messageRefs.current[msg.index] = el; }}
+                >
+                  <div className={`timeline-dot ${msg.sender === 'human' ? 'human' : 'assistant'}`}></div>
 
-                    <div
-                      className={`timeline-content ${!isSystemContextSelected && selectedMessageIndex !== null && selectedMessageIndex === msg.index ? 'selected' : ''} ${isMarked(msg.index, 'deleted') ? 'is-deleted' : ''}`}
-                      onClick={() => handleMessageSelect(msg.index)}
-                    >
-                      <div className="timeline-header">
-                        <div className="timeline-sender">
-                          <div className={`timeline-avatar ${getPlatformAvatarClass(msg.sender, conversationInfo?.platform)}${format === 'jsonl_chat' && ['chatgpt', 'gemini', 'grok', 'copilot', 'minimax', 'kimi', 'glm', 'deepseek'].includes(inferJsonlModelKey(msg.model_id)) ? ' model-icon-white-bg' : ''}`}>
-                            {msg.sender === 'human' ? '👤' : (
-                              <PlatformIcon
-                                platform={conversationInfo?.platform?.toLowerCase() || 'claude'}
-                                format={format}
-                                size={20}
-                                modelId={format === 'jsonl_chat' ? msg.model_id : undefined}
-                              />
-                            )}
-                          </div>
-                          <div className="sender-info">
-                            <div className="sender-name">
-                              {msg.sender_label}
-                              {(showAllBranches || branchAnalysis.branchPoints.size === 0) && (
-                                <span className="sort-position"> (#{index + 1})</span>
-                              )}
-                            </div>
-                            <div className="sender-time">
-                              {DateTimeUtils.formatTime(msg.timestamp)}
-                            </div>
-                          </div>
+                  <article className={`timeline-content reader-message-card ${isMarked(msg.index, 'deleted') ? 'is-deleted' : ''}`}>
+                    <header className="timeline-header reader-message-header">
+                      <div className="timeline-sender">
+                        <div className={`timeline-avatar ${getPlatformAvatarClass(msg.sender, conversationInfo?.platform)}${format === 'jsonl_chat' && ['chatgpt', 'gemini', 'grok', 'copilot', 'minimax', 'kimi', 'glm', 'deepseek'].includes(inferJsonlModelKey(msg.model_id)) ? ' model-icon-white-bg' : ''}`}>
+                          {msg.sender === 'human' ? '👤' : (
+                            <PlatformIcon
+                              platform={conversationInfo?.platform?.toLowerCase() || 'claude'}
+                              format={format}
+                              size={20}
+                              modelId={format === 'jsonl_chat' ? msg.model_id : undefined}
+                            />
+                          )}
                         </div>
-
+                        <div className="sender-info">
+                          <div className="sender-name">{msg.sender_label}</div>
+                          <div className="sender-time">{DateTimeUtils.formatTime(msg.timestamp)}</div>
+                        </div>
                       </div>
 
-                      <div className="timeline-body">
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          components={TIMELINE_MD_COMPONENTS}
-                        >
-                          {TextUtils.getPreview(msg.display_text)}
-                        </ReactMarkdown>
-                      </div>
+                      {versionInfo && versionInfo.total > 1 && !showAllBranches && (
+                        <div className="message-version-control" aria-label={t('timeline.branch.versions')}>
+                          <button
+                            className="reader-icon-button"
+                            onClick={() => changeVersion(-1)}
+                            disabled={versionInfo.selectedIndex <= 0}
+                            title={t('timeline.branch.previousVersion')}
+                          >
+                            ‹
+                          </button>
+                          <span>{versionInfo.selectedIndex + 1}/{versionInfo.total}</span>
+                          <button
+                            className="reader-icon-button"
+                            onClick={() => changeVersion(1)}
+                            disabled={versionInfo.selectedIndex >= versionInfo.total - 1}
+                            title={t('timeline.branch.nextVersion')}
+                          >
+                            ›
+                          </button>
+                        </div>
+                      )}
+                    </header>
 
-                      {/* 消息标签和标记 */}
-                      <div className="timeline-footer">
-                        {/* 思考过程 - 仅助手消息显示 */}
+                    <div className="timeline-body reader-message-body">
+                      <MessageDetail
+                        processedData={data}
+                        selectedMessageIndex={msg.index}
+                        activeTab="content"
+                        searchQuery={searchQuery}
+                        format={format}
+                        onTabChange={() => {}}
+                        showTabs={false}
+                        contentOnly={true}
+                      />
+                    </div>
+
+                    <footer className="timeline-footer reader-message-footer">
+                      <div className="reader-message-tags">
                         {msg.sender !== 'human' && msg.thinking && (
-                          <div className="timeline-tag">
-                            <span>💭</span>
-                            <span>{t('timeline.tags.hasThinking')}</span>
-                          </div>
+                          <div className="timeline-tag"><span>💭</span><span>{t('timeline.tags.hasThinking')}</span></div>
                         )}
-                        {/* 图片：images 数组 + attachments 中的嵌入图片 */}
                         {totalImages > 0 && (
-                          <div className="timeline-tag">
-                            <Image size={14} />
-                            <span>{totalImages}{t('timeline.tags.images')}</span>
-                          </div>
+                          <div className="timeline-tag"><Image size={14} /><span>{totalImages}{t('timeline.tags.images')}</span></div>
                         )}
-                        {/* 附件：排除嵌入图片，只显示真实附件 */}
                         {regularAttachments.length > 0 && (
-                          <div className="timeline-tag">
-                            <span>📎</span>
-                            <span>{regularAttachments.length}{t('timeline.tags.attachments')}</span>
-                          </div>
+                          <div className="timeline-tag"><span>📎</span><span>{regularAttachments.length}{t('timeline.tags.attachments')}</span></div>
                         )}
-                        {/* Artifacts - 仅助手消息显示 */}
-                        {msg.sender !== 'human' && msg.artifacts && msg.artifacts.length > 0 && (
-                          <div className="timeline-tag">
-                            <span>🔧</span>
-                            <span>{msg.artifacts.length}{t('timeline.tags.artifacts')}</span>
-                          </div>
+                        {msg.artifacts?.length > 0 && (
+                          <div className="timeline-tag"><span>🔧</span><span>{msg.artifacts.length}{t('timeline.tags.artifacts')}</span></div>
                         )}
-                        {/* Canvas - 仅助手消息显示（Gemini格式） */}
-                        {msg.sender !== 'human' && msg.canvas && msg.canvas.length > 0 && (
-                          <div className="timeline-tag">
-                            <span>🔧</span>
-                            <span>Canvas</span>
-                          </div>
+                        {msg.tools?.length > 0 && (
+                          <div className="timeline-tag"><Search size={14} /><span>{t('timeline.tags.usedTools')}</span></div>
                         )}
-                        {/* 工具使用 - 通常只有助手消息有 */}
-                        {msg.tools && msg.tools.length > 0 && (
-                          <div className="timeline-tag">
-                            <Search size={14} />
-                            <span>{t('timeline.tags.usedTools')}</span>
-                          </div>
-                        )}
-                        {msg.citations && msg.citations.length > 0 && (
-                          <div className="timeline-tag">
-                            <span>🔗</span>
-                            <span>{msg.citations.length}{t('timeline.tags.citations')}</span>
-                          </div>
-                        )}
-
-                        {/* 标记状态 */}
                         {isMarked(msg.index, 'completed') && (
-                          <div className="timeline-tag completed">
-                            <span>{t('timeline.tags.completed')}</span>
-                          </div>
+                          <div className="timeline-tag completed"><span>{t('timeline.tags.completed')}</span></div>
                         )}
                         {isMarked(msg.index, 'important') && (
-                          <div className="timeline-tag important">
-                            <span>{t('timeline.tags.important')}</span>
-                          </div>
+                          <div className="timeline-tag important"><span>{t('timeline.tags.important')}</span></div>
                         )}
                         {isMarked(msg.index, 'deleted') && (
-                          <div className="timeline-tag deleted">
-                            <span>{t('timeline.tags.deleted')}</span>
-                          </div>
+                          <div className="timeline-tag deleted"><span>{t('timeline.tags.excluded')}</span></div>
                         )}
                       </div>
-                    </div>
-                  </div>
 
-                  {/* 分支切换器 */}
-                  {shouldShowBranchSwitcher && (
-                    <BranchSwitcher
-                      key={`branch-${msg.uuid}`}
-                      branchPoint={msg}
-                      availableBranches={branchData.branches}
-                      currentBranchIndex={branchFilters.get(msg.uuid) ?? branchData.currentBranchIndex}
-                      onBranchChange={(newIndex) => handleBranchSwitch(msg.uuid, newIndex)}
-                      onShowAllBranches={handleShowAllBranches}
-                      showAllMode={false}
-                      className="timeline-branch-switcher"
-                    />
-                  )}
-                </React.Fragment>
+                      <div className="reader-message-actions">
+                        <button
+                          className={`reader-text-button ${copiedMessageIndex === msg.index ? 'copied' : ''}`}
+                          onClick={() => handleCopyMessage(msg, msg.index)}
+                        >
+                          {copiedMessageIndex === msg.index ? <><ClipboardCheck size={14} /> {t('timeline.actions.copied')}</> : <><Copy size={14} /> {t('timeline.actions.copyMessage')}</>}
+                        </button>
+                        {markActions && (
+                          <button
+                            className={`reader-text-button ${markActions.isMarked(msg.index, 'important') ? 'active' : ''}`}
+                            onClick={() => markActions.toggleMark(msg.index, 'important')}
+                          >
+                            <Star size={14} /> {markActions.isMarked(msg.index, 'important') ? t('timeline.actions.unmarkImportant') : t('timeline.actions.markImportant')}
+                          </button>
+                        )}
+                        <button className="reader-text-button" onClick={() => handleMessageSelect(msg.index)}>
+                          {t('timeline.actions.openDetails')}
+                        </button>
+                      </div>
+                    </footer>
+                  </article>
+                </div>
               );
             })}
           </div>
-
-          {/* 文件切换预览 - 底部 */}
-          {nextFilePreview && (
-            <div
-              className="file-preview file-preview-bottom"
-              onClick={() => onFileSwitch && onFileSwitch(nextFilePreview.index)}
-            >
-              <div className="file-preview-inner">
-                <ChevronDown size={24} className="file-preview-arrow" />
-                <span className="file-preview-name">{nextFilePreview.file.name}</span>
-                <span className="file-preview-hint">{t('timeline.file.clickToNext')}</span>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* 右侧消息详情 */}
-        <div ref={rightPanelRef} className={`timeline-right-panel ${mobileDetailOpen ? 'mobile-open' : ''}`}>
+        <div ref={rightPanelRef} className={`timeline-right-panel ${mobileDetailOpen ? 'mobile-open' : ''} ${desktopDetailOpen ? 'desktop-open' : ''}`}>
+          {!isMobile && desktopDetailOpen && (
+            <button
+              className="desktop-detail-close"
+              onClick={() => setDesktopDetailOpen(false)}
+              aria-label={t('common.close')}
+            >
+              ×
+            </button>
+          )}
           <div className="mobile-detail-toolbar">
             <button className="mobile-detail-back" onClick={() => window.history.back()}>
               <ChevronLeft size={20} />
