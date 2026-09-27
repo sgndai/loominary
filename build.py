@@ -743,9 +743,14 @@ def run_checks() -> None:
     all_header = userscript_header(USERSCRIPT_PLATFORMS, version)
     chatgpt_header = userscript_header(["chatgpt"], version)
     release_url = "https://sgndai.github.io/loominary/loominary.user.js"
+    expected_update_lines = (
+        f"// @updateURL    {release_url}",
+        f"// @downloadURL  {release_url}",
+    )
+    for expected in expected_update_lines:
+        if expected not in all_header:
+            errors.append(f"Main userscript header is missing: {expected}")
     for directive in ("@downloadURL", "@updateURL"):
-        if f"{directive}  {release_url}" not in all_header:
-            errors.append(f"Main userscript header is missing sgndai {directive}")
         if directive in chatgpt_header:
             errors.append(f"Single-platform userscript must not advertise the main {directive}")
     if "Laumss.github.io" in all_header or "Laumss/loominary/issues" in all_header:
