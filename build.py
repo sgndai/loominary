@@ -270,6 +270,14 @@ def userscript_header(platforms: list[str], version: str) -> str:
         for platform in platforms
         for match in PLATFORMS[platform]["matches"]
     )
+    update_lines = ""
+    if platforms == USERSCRIPT_PLATFORMS:
+        release_url = "https://sgndai.github.io/loominary/loominary.user.js"
+        update_lines = (
+            f"// @updateURL    {release_url}\n"
+            f"// @downloadURL  {release_url}\n"
+        )
+
     return f"""// ==UserScript==
 // @name         Loominary (One-Click AI Chat Backup)
 // @name:zh-CN   支持Claude、ChatGPT、Grok、Gemini等多平台的全功能AI对话跨分支全局搜索文档PDF长截图导出管理工具
@@ -294,7 +302,7 @@ def userscript_header(platforms: list[str], version: str) -> str:
 // @author       Laumss; sgndai fork
 // @homepage     https://github.com/sgndai/loominary
 // @supportURL   https://github.com/sgndai/loominary/issues
-{match_lines}
+{update_lines}{match_lines}
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
@@ -302,7 +310,6 @@ def userscript_header(platforms: list[str], version: str) -> str:
 // @license      MIT
 // ==/UserScript==
 """
-
 
 def userscript_output_name(platforms: list[str]) -> str:
     if platforms == USERSCRIPT_PLATFORMS:
@@ -387,6 +394,15 @@ def build_react_pages() -> Path:
     size = sum(path.stat().st_size for path in build_dir.rglob("*") if path.is_file())
     print(f"[Pages] build/ ready ({size:,} bytes). No deployment was performed.")
     return build_dir
+
+
+def publish_pages_assets(build_dir: Path, userscript_path: Path) -> None:
+    if not (build_dir / "index.html").exists():
+        raise BuildError("Cannot publish Pages assets without build/index.html")
+    if not userscript_path.exists():
+        raise BuildError("Cannot publish Pages assets without the built userscript")
+    shutil.copy2(userscript_path, build_dir / "loominary.user.js")
+    print("[Pages] Added loominary.user.js to the deploy artifact.")
 
 
 def extension_manifest(platforms: list[str], version: str) -> dict:
@@ -571,7 +587,7 @@ def injected_script() -> str:
 """
 
 
-def build_extension(platform: str | None = None) -> Path:
+def build_extension(platform: str | None = None, build_dir: Path | None = None) -> Path:
     version = read_package_version()
     platforms = selected_platforms(platform)
     print(f"[Extension] Building platforms: {', '.join(platforms)}")
@@ -634,18 +650,18 @@ def build_extension(platform: str | None = None) -> Path:
         raise BuildError("Missing public/favicon.png and public/logo1024.png")
     shutil.copy2(icon_source, CHROME_DIR / "icons/icon.png")
 
-    build_dir = build_react_pages()
-    shutil.copytree(build_dir, CHROME_DIR / "app")
+    app_build_dir = build_dir or build_react_pages()
+    shutil.copytree(app_build_dir, CHROME_DIR / "app")
     print(f"[Extension] {CHROME_DIR.relative_to(ROOT)}/ ready")
     return CHROME_DIR
 
 
-def build_firefox(platform: str | None = None) -> Path:
+def build_firefox(platform: str | None = None, chrome_source: Path | None = None) -> Path:
     version = read_package_version()
-    build_extension(platform)
+    source_dir = chrome_source or build_extension(platform)
     if FIREFOX_DIR.exists():
         shutil.rmtree(FIREFOX_DIR)
-    shutil.copytree(CHROME_DIR, FIREFOX_DIR)
+    shutil.copytree(source_dir, FIREFOX_DIR)
 
     manifest_path = FIREFOX_DIR / "manifest.json"
     manifest = json.loads(read_text(manifest_path))
@@ -724,9 +740,14 @@ def run_checks() -> None:
 
     all_header = userscript_header(USERSCRIPT_PLATFORMS, version)
     chatgpt_header = userscript_header(["chatgpt"], version)
-    for forbidden in ("@downloadURL", "@updateURL", "Laumss/loominary/issues"):
-        if forbidden in all_header:
-            errors.append(f"Generated userscript header still contains {forbidden}")
+    release_url = "https://sgndai.github.io/loominary/loominary.user.js"
+    for directive in ("@downloadURL", "@updateURL"):
+        if f"{directive}  {release_url}" not in all_header:
+            errors.append(f"Main userscript header is missing sgndai {directive}")
+        if directive in chatgpt_header:
+            errors.append(f"Single-platform userscript must not advertise the main {directive}")
+    if "Laumss.github.io" in all_header or "Laumss/loominary/issues" in all_header:
+        errors.append("Generated userscript header still points to Laumss infrastructure")
     if "https://claude.ai/*" in chatgpt_header or "https://grok.com/*" in chatgpt_header:
         errors.append("Single-platform ChatGPT header contains another platform")
 
@@ -739,7 +760,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build Loominary artifacts")
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser("all", help="Build extension and userscript")
+    subparsers.add_parser("all", help="Build Pages, userscript, Chrome, and Firefox artifacts")
     subparsers.add_parser("check", help="Run fast static build checks")
     subparsers.add_parser("pages", help="Build the React application without deploying")
 
@@ -766,7 +787,9 @@ def main() -> int:
         if command == "check":
             run_checks()
         elif command == "pages":
-            build_react_pages()
+            pages_dir = build_react_pages()
+            userscript_path = build_userscript()
+            publish_pages_assets(pages_dir, userscript_path)
         elif command == "userscript":
             build_userscript(args.platform)
         elif command == "extension":
@@ -775,8 +798,11 @@ def main() -> int:
             build_firefox(args.platform)
         elif command == "all":
             run_checks()
-            build_extension()
-            build_userscript()
+            pages_dir = build_react_pages()
+            userscript_path = build_userscript()
+            chrome_dir = build_extension(build_dir=pages_dir)
+            build_firefox(chrome_source=chrome_dir)
+            publish_pages_assets(pages_dir, userscript_path)
         else:
             parser.error(f"Unknown command: {command}")
         return 0
