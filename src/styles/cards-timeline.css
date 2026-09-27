@@ -1001,7 +1001,7 @@
   word-wrap: break-word;
   word-break: break-word;
   overflow-wrap: break-word;
-  white-space: pre-wrap;
+  white-space: normal;
   max-width: 100%;
   overflow: hidden; /* 防止内容溢出导致移动端界面被拉伸 */
 }
