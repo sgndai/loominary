@@ -45,6 +45,7 @@ export function buildArtifactPaths(args) {
   if (command === 'all' || !command) {
     return [
       path.join(root, 'chrome', 'content.js'),
+      path.join(root, 'firefox', 'content.js'),
       path.join(root, 'dist', 'loominary.user.js')
     ];
   }
