@@ -2254,8 +2254,10 @@ function App() {
                       const newScope = exportOptions.scope === 'currentBranch' ? 'allBranches' : 'currentBranch';
                       setExportOptions(prev => ({ ...prev, scope: newScope }));
                       setCurrentBranchState(prev => ({
-                        ...prev,
                         showAllBranches: newScope === 'allBranches',
+                        currentBranchIndexes: prev.conversationUuid === activeBranchConversationKey
+                          ? prev.currentBranchIndexes
+                          : new Map(),
                         conversationUuid: activeBranchConversationKey
                       }));
                     }}
