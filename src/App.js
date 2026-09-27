@@ -343,8 +343,12 @@ const useFileManager = () => {
       const existingIndex = validFiles.length === 1
         ? files.findIndex(ef => ef.name === validFiles[0].name && ef.lastModified === validFiles[0].lastModified)
         : -1;
-      if (activate && existingIndex >= 0) setCurrentFileIndex(existingIndex);
-      setError('文件已加载');
+      if (activate && existingIndex >= 0) {
+        setCurrentFileIndex(existingIndex);
+        setError(null);
+      } else {
+        setError('文件已加载');
+      }
       return { firstIndex: existingIndex, count: 0, added: false };
     }
     const isCompatible = await checkCompatibility(newFiles);
