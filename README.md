@@ -68,9 +68,9 @@ Loominary goes beyond the chat and captures the context around each conversation
 
 ## Getting Started
 
-Try it online at [Loominary](https://laumss.github.io/react/welcome/).
+Open the maintained viewer at [sgndai.github.io/loominary](https://sgndai.github.io/loominary/).
 
-[Greasyfork](https://greasyfork.org/en/scripts/539579-loominary-one-click-ai-chat-backup)
+Install the maintained userscript from [sgndai.github.io/loominary/loominary.user.js](https://sgndai.github.io/loominary/loominary.user.js). The userscript uses the same URL for its update metadata, so later releases update through the userscript manager.
 
 -----
 
@@ -80,7 +80,7 @@ While the online version runs entirely in your browser, building locally adds a 
 
 Tags, memories, project instructions, conversation history—anything Loominary archives can be exposed to local AI clients via MCP or similar protocols. If you mark a set of conversations as important, or save Claude project context alongside a chat, that information becomes available as context for whatever AI tool you're running locally.
 
-This is still taking shape. While the architecture supports it, the integration surface is still in its early stages. If you're interested in building on top of this—or have ideas about how to bridge Loominary with other AI clients—[open an issue](https://github.com/Laumss/Loominary/issues) and let's figure it out together.
+This is still taking shape. While the architecture supports it, the integration surface is still in its early stages. If you're interested in building on top of this—or have ideas about how to bridge Loominary with other AI clients—[open an issue](https://github.com/sgndai/loominary/issues) and let's figure it out together.
 
 Sprint 2 adds the first concrete version of that surface:
 
@@ -106,4 +106,4 @@ Loominary is a ground-up rewrite of the original Lyra Exporter. The old codebase
 
 ## Contributing
 
-A contributing guide and development roadmap are on the way. In the meantime, if you have any idea, please [open an discussion](https://github.com/Laumss/Loominary/discussions).
+A contributing guide and development roadmap are on the way. In the meantime, if you have any idea, please [open an issue](https://github.com/sgndai/loominary/issues).
