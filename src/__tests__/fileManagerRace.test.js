@@ -2,8 +2,11 @@ import React, { useEffect } from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 
-jest.mock('react-markdown', () => () => null);
-jest.mock('remark-gfm', () => () => null);
+jest.mock('../components/ConversationTimeline', () => () => null);
+jest.mock('../components/FloatingActionButton', () => () => null);
+jest.mock('../components/SearchOverlay', () => () => null);
+jest.mock('../components/UnifiedCard', () => ({ CardGrid: () => null }));
+jest.mock('../components/SettingsPanel', () => () => null);
 
 const { useFileManager } = require('../App');
 
