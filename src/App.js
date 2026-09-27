@@ -2323,6 +2323,14 @@ function App() {
                   onImportFolder: handleImportFolder
                 }}
               />
+              ) : fileError ? (
+              <div className="timeline-load-state" style={{ padding: 24, whiteSpace: 'pre-wrap' }}>
+                {fileError}
+              </div>
+              ) : (isFileLoading || !processedData) ? (
+              <div className="timeline-load-state" style={{ padding: 24 }}>
+                {t('common.loading') || 'Loading...'}
+              </div>
               ) : (
               <ConversationTimeline
                 data={processedData}
