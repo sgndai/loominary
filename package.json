@@ -1,6 +1,6 @@
 {
   "name": "loominary",
-  "version": "26.3.1",
+  "version": "26.3.2",
   "private": true,
   "homepage": ".",
   "description": "A handy tool for exporting chat conversations.",
@@ -33,6 +33,7 @@
     "local-service": "node server/loominary-local-service.mjs",
     "test": "npm run test:local-service",
     "test:local-service": "node --test tests/*.test.mjs",
+    "test:frontend": "react-scripts test --watchAll=false --runInBand",
     "build": "cross-env NODE_OPTIONS=--max-old-space-size=4096 react-scripts build",
     "postbuild": "node -e \"const fs=require('fs');fs.mkdirSync('build/welcome',{recursive:true});let h=fs.readFileSync('build/index.html','utf8');h=h.replace(/\\.\\//g,'../');fs.writeFileSync('build/welcome/index.html',h)\"",
     "build:app": "npm run build",

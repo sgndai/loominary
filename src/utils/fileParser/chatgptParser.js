@@ -515,11 +515,12 @@ export const detectChatGPTBranches = (processedData) => {
     curr = parent;
   }
 
-  // 清理旧的 branch 标记
+  // 清理旧的 branch 标记，并把 raw current_node 映射到可见消息。
   messages.forEach(msg => {
     msg.is_branch_point = false;
     msg.branch_id = null;
     msg.branch_level = 0;
+    msg._is_current_path = !!(msg._node_id && mainPathSet.has(msg._node_id));
   });
 
   // 构建消息级的 parent-child 映射
@@ -581,27 +582,18 @@ export const detectChatGPTBranches = (processedData) => {
     }
   }
 
-  // 为根消息分配分支路径：第一个根作为 main，其余作为 main.1, main.2...
-  rootMessages.forEach((rootMsg, idx) => {
+  // 为根消息分配分支路径。raw current_node 所在的根分支优先作为 main；
+  // 缺少 current_node 时才退回原有的消息顺序。
+  const currentRoot = rootMessages.find(msg => msg._is_current_path) || null;
+  const orderedRoots = currentRoot
+    ? [currentRoot, ...rootMessages.filter(msg => msg !== currentRoot)]
+    : rootMessages;
+
+  orderedRoots.forEach((rootMsg, idx) => {
     const branchPath = idx === 0 ? 'main' : `main.${idx}`;
     const level = idx === 0 ? 0 : 1;
     assign(rootMsg, branchPath, level);
   });
-
-  // 归一化根路径：将第一个人类/助手消息的分支统一为 main
-  try {
-    const firstMsg = messages.find(m => m.sender === 'human' || m.sender === 'assistant');
-    if (firstMsg && firstMsg.branch_id && firstMsg.branch_id !== 'main') {
-      const prefix = firstMsg.branch_id;
-      messages.forEach(msg => {
-        if (msg.branch_id && msg.branch_id.startsWith(prefix)) {
-          msg.branch_id = msg.branch_id.replace(prefix, 'main');
-        }
-      });
-    }
-  } catch (e) {
-    // ignore errors
-  }
 
   return processedData;
 };
