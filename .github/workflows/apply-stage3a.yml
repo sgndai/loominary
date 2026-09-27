@@ -40,10 +40,6 @@ jobs:
 
       - name: Validate build pipeline
         run: |
-          python build.py check
           npm run test
           npm run test:frontend
-          CI=false npm run build
-          npm run build:userscript
-          npm run build:extension
-          npm run build:firefox
+          npm run build:all
