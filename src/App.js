@@ -916,27 +916,22 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredConversations, cardSortField, cardSortOrder, hasZipData, renameVersion]);
 
-  // 集中化构建全局搜索索引（仅在全部文件加载完成后执行）
+  // 集中化构建全局搜索索引。GlobalSearchManager 使用 generation
+  // 原子提交，因此文件切换期间无需依赖延迟来避免旧索引覆盖新索引。
   useEffect(() => {
-    if (files.length > 0 && allFilesLoaded) {
-      // 使用 setTimeout 来避免阻塞主线程
-      const timer = setTimeout(() => {
-        console.log('[App] 正在构建全局搜索索引...');
-        const globalSearchManager = getGlobalSearchManager();
-        const renameManager = getRenameManager();
-        const customNames = renameManager.getAllRenames();
+    if (files.length === 0 || !allFilesLoaded) return;
 
-        globalSearchManager.buildGlobalIndex(files, processedData, currentFileIndex, customNames)
-          .then(() => {
-            console.log('[App] 全局搜索索引已更新');
-          })
-          .catch(err => {
-            console.error('[App] 构建全局搜索索引失败:', err);
-          });
-      }, 300); // 延迟执行，等待状态稳定
+    const globalSearchManager = getGlobalSearchManager();
+    const renameManager = getRenameManager();
+    const customNames = renameManager.getAllRenames();
 
-      return () => clearTimeout(timer);
-    }
+    globalSearchManager.buildGlobalIndex(files, processedData, currentFileIndex, customNames)
+      .then(() => {
+        console.log('[App] 全局搜索索引已更新');
+      })
+      .catch(err => {
+        console.error('[App] 构建全局搜索索引失败:', err);
+      });
   }, [files, processedData, currentFileIndex, allFilesLoaded]);
 
 
