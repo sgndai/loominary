@@ -17,6 +17,7 @@ import { extractChatData, detectBranches, parseJSONL, extractMergedJSONLData } f
 import {
   generateFileCardUuid,
   getCurrentFileUuid,
+  parseUuid,
 } from './utils/data/uuidManager';
 import { MarkManager } from './utils/data/markManager';
 import { StarManager } from './utils/data/starManager';
@@ -1057,12 +1058,10 @@ function App() {
     const targetFileIndex = Number.isInteger(fileIndex) ? fileIndex : currentFileIndex;
     const needFileSwitch = targetFileIndex !== currentFileIndex;
 
-    let targetConversationUuid = conversationUuid || null;
-    if (targetConversationUuid?.startsWith('file-')) {
-      const parts = targetConversationUuid.split('_');
-      if (parts.length > 1) {
-        targetConversationUuid = parts.slice(1).join('_');
-      }
+    let targetConversationUuid = null;
+    if (conversationUuid) {
+      const parsed = parseUuid(conversationUuid);
+      targetConversationUuid = parsed.conversationUuid;
     }
 
     switchToTimeline(targetFileIndex, conversationUuid || null);
