@@ -1982,9 +1982,15 @@ function App() {
         if (payload.exportContext) {
           setPendingExportContext(payload.exportContext);
         }
+
+        postViewerBridgeMessage({ type: 'LOOMINARY_LOADED' }, bridgeContext);
       } catch (err) {
         console.error('[Loominary] bridge load failed:', err);
         setErrorRef.current('Failed to load data: ' + err.message);
+        postViewerBridgeMessage({
+          type: 'LOOMINARY_LOAD_FAILED',
+          error: err.message
+        }, bridgeContext);
       }
     };
 
