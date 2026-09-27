@@ -97,56 +97,40 @@ export class DataProcessor {
   /**
    * 获取时间线消息
    */
-  static getTimelineMessages(viewMode, selectedFileIndex, currentFileIndex, processedData, selectedConversationUuid) {
-    // 支持 timeline 和 whiteboard 视图模式
+  static getTimelineMessages(viewMode, processedData) {
     if (viewMode !== 'timeline' && viewMode !== 'whiteboard') {
       return [];
     }
 
-    const dataSource = (selectedFileIndex !== null && selectedFileIndex === currentFileIndex)
-      ? processedData
-      : null;
-
-    if (!dataSource) {
-      return [];
-    }
-
-    return dataSource.chat_history || [];
+    return processedData?.chat_history || [];
   }
 
   /**
    * 获取当前对话信息
    */
   static getCurrentConversation(params) {
-    const { viewMode, selectedFileIndex, selectedConversationUuid, processedData, files, currentFileIndex, fileMetadata, starActions } = params;
+    const { viewMode, processedData, files, currentFileIndex, fileMetadata } = params;
     const renameManager = getRenameManager();
 
-    // 支持 timeline 和 whiteboard 视图模式
-    if ((viewMode === 'timeline' || viewMode === 'whiteboard') && selectedFileIndex !== null) {
-      const dataSource = selectedFileIndex === currentFileIndex ? processedData : null;
-
-      if (!dataSource) return null;
-
-      const file = files[selectedFileIndex];
+    if ((viewMode === 'timeline' || viewMode === 'whiteboard') && processedData) {
+      const file = files[currentFileIndex];
       if (file) {
         const metadata = fileMetadata[file.name] || {};
-        const isCurrentFile = selectedFileIndex === currentFileIndex;
-        const fileData = isCurrentFile ? dataSource : null;
-        const fileUuid = generateFileCardUuid(selectedFileIndex, file);
-        const originalName = fileData?.meta_info?.title || metadata.title || file.name.replace('.json', '');
+        const fileUuid = generateFileCardUuid(currentFileIndex, file);
+        const originalName = processedData.meta_info?.title || metadata.title || file.name.replace('.json', '');
         const displayName = renameManager.getRename(fileUuid, originalName);
 
         return {
           type: 'file',
           uuid: fileUuid,
           name: displayName,
-          originalName: originalName,
+          originalName,
           fileName: file.name,
-          fileIndex: selectedFileIndex,
-          isCurrentFile,
-          format: fileData?.format || metadata.format || 'unknown',
-          model: fileData?.meta_info?.model || metadata.model || '',
-          messageCount: fileData?.chat_history?.length || metadata.messageCount || 0,
+          fileIndex: currentFileIndex,
+          isCurrentFile: true,
+          format: processedData.format || metadata.format || 'unknown',
+          model: processedData.meta_info?.model || metadata.model || '',
+          messageCount: processedData.chat_history?.length || metadata.messageCount || 0,
           created_at: metadata.created_at || (file.lastModified ? new Date(file.lastModified).toISOString() : null),
           platform: metadata.platform || 'claude'
         };
