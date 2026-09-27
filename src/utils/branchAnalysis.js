@@ -106,10 +106,14 @@ export function analyzeBranches(messages) {
           };
         });
 
+        const currentBranchIndex = branches.findIndex(branch =>
+          branch.messages.some(message => message._is_current_path)
+        );
+
         branchPoints.set(parentUuid, {
           branchPoint,
           branches,
-          currentBranchIndex: 0
+          currentBranchIndex: currentBranchIndex >= 0 ? currentBranchIndex : 0
         });
       }
     }
@@ -132,7 +136,7 @@ export function filterDisplayMessages(messages, branchFilters, branchAnalysis, s
 
   // 预处理：将每个分支的消息数组转换为 Set，大幅提高 lookup 性能
   const branchPointInfo = Array.from(branchAnalysis.branchPoints.entries()).map(([uuid, data]) => {
-    const selectedIndex = branchFilters.get(uuid) ?? 0; // 默认选择第一个分支
+    const selectedIndex = branchFilters.get(uuid) ?? data.currentBranchIndex ?? 0;
     const branches = data.branches.map(b => ({
       index: b.branchIndex,
       messageUuids: new Set(b.messages.map(m => m.uuid))
@@ -254,7 +258,7 @@ export function computeBranchFiltersForMessage(targetMessage, messages, branchAn
   const newBranchFilters = new Map();
 
   for (const [branchPointUuid, branchData] of branchAnalysis.branchPoints) {
-    let selectedBranchIndex = 0;
+    let selectedBranchIndex = branchData.currentBranchIndex ?? 0;
 
     for (let bIdx = 0; bIdx < branchData.branches.length; bIdx++) {
       const branch = branchData.branches[bIdx];
