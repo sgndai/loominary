@@ -8,7 +8,6 @@ import { PlatformUtils, DateTimeUtils } from '../utils/fileParser';
 import { useI18n } from '../index.js';
 import { getRenameManager } from '../utils/data/renameManager.js';
 import StorageManager from '../utils/data/storageManager.js';
-import SystemContextCard from './SystemContextCard';
 import { analyzeBranches, filterDisplayMessages, getMessageVersionInfo, findMessageByLocator, computeBranchFiltersForMessage } from '../utils/branchAnalysis';
 import { Copy, ClipboardCheck, Star, Trash2, Pencil, ChevronsDown, RotateCcw, ChevronUp, ChevronDown, ChevronLeft, Image, Check, Search } from 'lucide-react';
 
@@ -270,9 +269,13 @@ const ConversationTimeline = ({
     });
   }, [fileUuid]);
 
-  // 切换到桌面端时自动关闭移动抽屉
+  // 响应式切换时只保留当前布局对应的详情抽屉状态。
   useEffect(() => {
-    if (!isMobile) setMobileDetailOpen(false);
+    if (isMobile) {
+      setDesktopDetailOpen(false);
+    } else {
+      setMobileDetailOpen(false);
+    }
   }, [isMobile]);
 
   // 移动端详情打开时锁住外部滚动、隐藏 FAB、管理浏览器历史
