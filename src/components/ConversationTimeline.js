@@ -236,7 +236,6 @@ const ConversationTimeline = ({
 
   const [selectedMessageIndex, setSelectedMessageIndex] = useState(null);
   const [isSystemContextSelected, setIsSystemContextSelected] = useState(false);
-  const [isTransitioning, setIsTransitioning] = useState(false);
   const [activeTab, setActiveTab] = useState('content');
   const [branchFilters, setBranchFilters] = useState(new Map());
   const [showAllBranches, setShowAllBranches] = useState(false);
@@ -405,27 +404,6 @@ const ConversationTimeline = ({
 
   }, [onBranchStateChange, branchStateKey]);
 
-  const handleShowAllBranches = useCallback(() => {
-    const newShowAllBranches = !showAllBranches;
-    setShowAllBranches(newShowAllBranches);
-
-    console.log(`[分支切换] ${newShowAllBranches ? '显示所有分支' : '隐藏分支'}`);
-
-    // 通知父组件分支状态变化
-    if (onBranchStateChange) {
-      onBranchStateChange({
-        showAllBranches: newShowAllBranches,
-        currentBranchIndexes: newShowAllBranches ? new Map() : branchFilters,
-        conversationUuid: branchStateKey
-      });
-    }
-
-    if (newShowAllBranches) {
-      setBranchFilters(new Map());
-    }
-
-  }, [showAllBranches, branchFilters, onBranchStateChange, branchStateKey]);
-
   // ==================== 状态和副作用 ====================
 
   // 重置分支状态 - 当对话切换时，立即隐藏
@@ -434,7 +412,6 @@ const ConversationTimeline = ({
     // 相同 uuid 不重置（防止同一文件重复加载时清空分支状态）
     if (uuid === lastResetUuidRef.current) return;
     lastResetUuidRef.current = uuid;
-    setIsTransitioning(true);
     setBranchFilters(new Map());
     setShowAllBranches(false);
     setSelectedMessageIndex(null);
@@ -442,21 +419,6 @@ const ConversationTimeline = ({
     setLocatorRequest(null);
     setPendingMessageFocus(null);
   }, [branchStateKey]);
-
-  // 新消息到来后 fade-in
-  useEffect(() => {
-    if (isTransitioning) {
-      if (messages && messages.length > 0) {
-        const t = setTimeout(() => setIsTransitioning(false), 30);
-        return () => clearTimeout(t);
-      } else {
-        // 安全兜底：即使 messages 暂时为空也不能永远卡在 transitioning
-        const fallback = setTimeout(() => setIsTransitioning(false), 500);
-        return () => clearTimeout(fallback);
-      }
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, isTransitioning]);
 
   // 消息定位请求只记录目标；真正的定位由当前文件/分支状态驱动。
   useEffect(() => {
@@ -836,7 +798,7 @@ const ConversationTimeline = ({
     <div className={`enhanced-timeline-container ${platformClass} desktop-layout`}>
       <div className="timeline-main-content">
         {/* 主阅读区 */}
-        <div className="timeline-left-panel reader-panel" ref={leftPanelRef} style={{ opacity: isTransitioning ? 0 : 1, transition: 'opacity 0.2s ease' }}>
+        <div className="timeline-left-panel reader-panel" ref={leftPanelRef}>
           {conversationInfo && (
             <div className="conversation-reader-header">
               <div className="reader-title-row">
