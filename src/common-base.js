@@ -121,6 +121,30 @@
         };
         // #endplatform
 
+        const LANGUAGE_KEY = 'loominary.language';
+        const readLanguagePreference = () => {
+            const legacy = localStorage.getItem('exporterLanguage');
+            if (typeof LOOMINARY_ENV !== 'undefined' && LOOMINARY_ENV === 'userscript' && typeof GM_getValue === 'function') {
+                const stored = GM_getValue(LANGUAGE_KEY, null);
+                if (stored === 'zh' || stored === 'en') return stored;
+                const migrated = legacy === 'zh' || legacy === 'en' ? legacy : 'zh';
+                if (typeof GM_setValue === 'function') GM_setValue(LANGUAGE_KEY, migrated);
+                return migrated;
+            }
+            return legacy === 'zh' || legacy === 'en' ? legacy : 'zh';
+        };
+
+        const persistLanguagePreference = (lang) => {
+            if (typeof LOOMINARY_ENV !== 'undefined' && LOOMINARY_ENV === 'userscript' && typeof GM_setValue === 'function') {
+                GM_setValue(LANGUAGE_KEY, lang);
+            } else {
+                localStorage.setItem('exporterLanguage', lang);
+            }
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                chrome.storage.local.set({ loominary_lang: lang });
+            }
+        };
+
         const i18n = {
             languages: {
                 zh: {
@@ -176,14 +200,12 @@
                     exportCancelled: 'Export cancelled',
                 }
             },
-            currentLang: localStorage.getItem('exporterLanguage') || (navigator.language.startsWith('zh') ? 'zh' : 'en'),
+            currentLang: readLanguagePreference(),
             t: (key) => i18n.languages[i18n.currentLang]?.[key] || key,
             setLanguage: (lang) => {
+                if (lang !== 'zh' && lang !== 'en') return;
                 i18n.currentLang = lang;
-                localStorage.setItem('exporterLanguage', lang);
-                if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-                    chrome.storage.local.set({ loominary_lang: lang });
-                }
+                persistLanguagePreference(lang);
             },
             getLanguageShort() {
                 return this.currentLang === 'zh' ? '简体中文' : 'English';
@@ -506,56 +528,85 @@
         return canvasData;
     }
     // #endplatform
+        let activeViewerWindow = null;
+        let activeViewerSessionId = null;
+        const VIEWER_ORIGIN = 'https://sgndai.github.io';
+        const VIEWER_BASE_URL = `${VIEWER_ORIGIN}/loominary/`;
+
+        const createViewerSessionId = () => {
+            if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+                return crypto.randomUUID();
+            }
+            const bytes = new Uint32Array(4);
+            if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+                crypto.getRandomValues(bytes);
+                return Array.from(bytes, value => value.toString(16).padStart(8, '0')).join('');
+            }
+            return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        };
+
         const Communicator = {
             open: async (jsonData, filename, extraData) => {
                 const defaultFilename = filename || `${State.currentPlatform}_export_${new Date().toISOString().slice(0,10)}.json`;
 
-                // Userscript mode: open GitHub Pages viewer and transfer data via postMessage
+                // Userscript mode: open the fork-owned viewer and bind the transfer to one window/session.
                 if (typeof LOOMINARY_ENV !== 'undefined' && LOOMINARY_ENV === 'userscript') {
-                    const GITHUB_PAGES_URL = 'https://Laumss.github.io/react';
-                    // Use unsafeWindow.open so the new tab's window.opener = actual page window,
-                    // not the ViolentMonkey sandbox proxy. This allows github.io to postMessage back.
                     const _opener = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
-                    const newWin = _opener.open(GITHUB_PAGES_URL, '_blank');
-                    if (!newWin) {
-                        alert(i18n.t('cannotOpenExporter'));
-                        return false;
-                    }
+                    const sourceOrigin = _opener.location.origin;
+                    const sessionId = createViewerSessionId();
+                    const viewerUrl = `${VIEWER_BASE_URL}#bridge=${encodeURIComponent(sessionId)}&source=${encodeURIComponent(sourceOrigin)}`;
+
                     return new Promise((resolve) => {
-                        // Poll with LOOMINARY_HANDSHAKE until the GitHub Pages app signals it is ready
-                        const interval = setInterval(() => {
-                            try {
-                                newWin.postMessage({ type: 'LOOMINARY_HANDSHAKE' }, 'https://Laumss.github.io');
-                            } catch (e) { /* page may not be loaded yet */ }
-                        }, 500);
-                        const timeout = setTimeout(() => {
-                            clearInterval(interval);
+                        let settled = false;
+                        let newWin = null;
+
+                        const cleanup = () => {
                             _opener.removeEventListener('message', handler);
-                            console.warn('[Loominary] Timed out waiting for GitHub Pages viewer to respond');
-                            resolve(false);
-                        }, 15000);
-                        function handler(event) {
-                            if (event.source !== newWin || event.data?.type !== 'LOOMINARY_READY') return;
-                            clearInterval(interval);
                             clearTimeout(timeout);
-                            _opener.removeEventListener('message', handler);
-                            // Viewer sends back its saved export config — save it to local storage so
-                            // content-script exports use the same settings as the React viewer.
+                        };
+
+                        const finish = (value) => {
+                            if (settled) return;
+                            settled = true;
+                            cleanup();
+                            resolve(value);
+                        };
+
+                        const handler = (event) => {
+                            if (event.origin !== VIEWER_ORIGIN) return;
+                            if (event.source !== newWin) return;
+                            if (event.data?.type !== 'LOOMINARY_READY') return;
+                            if (event.data?.sessionId !== sessionId) return;
+
                             if (event.data.config && typeof event.data.config === 'object') {
                                 const cfgStr = JSON.stringify(event.data.config);
-                                console.log('[Loominary] LOOMINARY_READY: syncing config from viewer:', cfgStr);
-                                try { localStorage.setItem('loominary_export_config', cfgStr); } catch (e) {}
+                                try { localStorage.setItem('loominary_export_config', cfgStr); } catch (_) {}
                             }
-                            // Detect page theme via color-scheme CSS property
-                            const pageTheme = getComputedStyle(document.documentElement).getPropertyValue('color-scheme').trim();
-                            const detectedTheme = (pageTheme === 'light') ? 'light' : 'dark';
+
+                            activeViewerWindow = newWin;
+                            activeViewerSessionId = sessionId;
                             newWin.postMessage({
                                 type: 'LOOMINARY_LOAD_DATA',
-                                data: { content: jsonData, filename: defaultFilename, lang: i18n.currentLang, theme: detectedTheme, ...extraData }
-                            }, 'https://Laumss.github.io');
-                            resolve(true);
-                        }
+                                sessionId,
+                                data: { content: jsonData, filename: defaultFilename, ...extraData }
+                            }, VIEWER_ORIGIN);
+                            finish(true);
+                        };
+
                         _opener.addEventListener('message', handler);
+                        newWin = _opener.open(viewerUrl, '_blank');
+
+                        if (!newWin) {
+                            cleanup();
+                            alert(i18n.t('cannotOpenExporter'));
+                            resolve(false);
+                            return;
+                        }
+
+                        const timeout = setTimeout(() => {
+                            console.warn('[Loominary] Timed out waiting for the viewer READY message');
+                            finish(false);
+                        }, 15000);
                     });
                 }
 
@@ -607,10 +658,14 @@
         _msgTarget.addEventListener('message', (event) => {
             if (event.data?.type !== 'LOOMINARY_SETTINGS_UPDATE') return;
             if (!event.data.config || typeof event.data.config !== 'object') return;
-            const config = event.data.config;
-            console.log('[Loominary] LOOMINARY_SETTINGS_UPDATE received, saving config:', JSON.stringify(config));
             if (typeof LOOMINARY_ENV !== 'undefined' && LOOMINARY_ENV === 'userscript') {
-                try { localStorage.setItem('loominary_export_config', JSON.stringify(config)); } catch (e) {}
+                if (event.origin !== VIEWER_ORIGIN) return;
+                if (event.source !== activeViewerWindow) return;
+                if (!activeViewerSessionId || event.data.sessionId !== activeViewerSessionId) return;
+            }
+            const config = event.data.config;
+            if (typeof LOOMINARY_ENV !== 'undefined' && LOOMINARY_ENV === 'userscript') {
+                try { localStorage.setItem('loominary_export_config', JSON.stringify(config)); } catch (_) {}
             } else if (typeof chrome !== 'undefined' && chrome.storage?.local) {
                 chrome.storage.local.set({ loominary_export_config: config });
             }
