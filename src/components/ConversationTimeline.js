@@ -244,6 +244,8 @@ const ConversationTimeline = ({
   const [copiedMessageIndex, setCopiedMessageIndex] = useState(null);
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
   const [desktopDetailOpen, setDesktopDetailOpen] = useState(false);
+  const [locatorRequest, setLocatorRequest] = useState(null);
+  const [pendingMessageFocus, setPendingMessageFocus] = useState(null);
 
   // 笔记管理
   const fileUuid = data?.meta_info?.uuid || null;
@@ -437,6 +439,8 @@ const ConversationTimeline = ({
     setShowAllBranches(false);
     setSelectedMessageIndex(null);
     setDesktopDetailOpen(false);
+    setLocatorRequest(null);
+    setPendingMessageFocus(null);
   }, [branchStateKey]);
 
   // 新消息到来后 fade-in
@@ -454,189 +458,133 @@ const ConversationTimeline = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, isTransitioning]);
 
-  // 消息定位 - 监听 scrollToMessage 事件
+  // 消息定位请求只记录目标；真正的定位由当前文件/分支状态驱动。
   useEffect(() => {
     const handleScrollToMessage = (event) => {
-      const { messageIndex, messageId, messageUuid, highlight, fileIndex, conversationUuid } = event.detail;
-
-      console.log(`[消息定位] 开始定位 - fileIndex: ${fileIndex}, messageUuid: ${messageUuid}, messageIndex: ${messageIndex}`);
-      console.log(`[消息定位] 当前消息总数: ${messages.length}, 显示消息数: ${displayMessages.length}`);
-
-      // 如果消息列表为空，等待并重试
-      if (messages.length === 0) {
-        console.log(`[消息定位] 消息列表为空，等待加载后重试...`);
-        let retryCount = 0;
-        const maxRetries = 10;
-        const retryInterval = setInterval(() => {
-          retryCount++;
-          if (messages.length > 0 || retryCount >= maxRetries) {
-            clearInterval(retryInterval);
-            if (messages.length > 0) {
-              console.log(`[消息定位] 消息已加载，重试定位 (第${retryCount}次)`);
-              window.dispatchEvent(new CustomEvent('scrollToMessage', { detail: event.detail }));
-            } else {
-              console.error(`[消息定位] 超过最大重试次数，消息列表仍为空`);
-            }
-          }
-        }, 200);
-        return;
-      }
-
-      const targetMessage = findMessageByLocator(messages, { messageUuid, messageId, messageIndex, fileIndex, conversationUuid });
-
-      if (!targetMessage) {
-        console.warn(`[消息定位] 未找到目标消息`);
-        console.warn(`  - messageUuid: ${messageUuid}`);
-        console.warn(`  - messageId: ${messageId}`);
-        console.warn(`  - messageIndex: ${messageIndex}`);
-        console.warn(`  - 第一条消息UUID: ${messages[0]?.uuid}`);
-        console.warn(`  - 最后一条消息UUID: ${messages[messages.length - 1]?.uuid}`);
-
-        // 尝试显示所有分支后再次定位
-        if (branchAnalysis.branchPoints.size > 0 && !showAllBranches) {
-          console.log(`[消息定位] 尝试显示所有分支后定位...`);
-          handleShowAllBranches();
-
-          // 延迟后重试
-          setTimeout(() => {
-            window.dispatchEvent(new CustomEvent('scrollToMessage', { detail: event.detail }));
-          }, 800);
-        }
-        return;
-      }
-
-      const targetMessageIndex = targetMessage.index;
-      console.log(`[消息定位] 找到目标消息 - index: ${targetMessageIndex}, uuid: ${targetMessage.uuid}`);
-
-      // 检查消息是否在当前显示的消息中
-      const isMessageVisible = displayMessages.some(msg => msg.uuid === targetMessage.uuid);
-
-      if (!isMessageVisible && branchAnalysis.branchPoints.size > 0 && !showAllBranches) {
-        // 消息不在当前分支,需要切换分支
-        console.log(`[消息定位] 消息不在当前分支,尝试切换分支...`);
-
-        // 查找是否有分支包含该消息
-        const foundBranch = Array.from(branchAnalysis.branchPoints.values()).some(branchData =>
-          branchData.branches.some(branch =>
-            branch.messages.some(msg => msg.uuid === targetMessage.uuid)
-          )
-        );
-
-        if (foundBranch) {
-          const newBranchFilters = computeBranchFiltersForMessage(targetMessage, messages, branchAnalysis);
-          console.log(`[消息定位] 批量更新分支过滤器:`, Array.from(newBranchFilters.entries()));
-
-          // 批量更新所有分支过滤器
-          setBranchFilters(newBranchFilters);
-          setShowAllBranches(false);
-
-          // 通知父组件
-          if (onBranchStateChange) {
-            onBranchStateChange({
-              showAllBranches: false,
-              currentBranchIndexes: newBranchFilters,
-              conversationUuid: branchStateKey
-            });
-          }
-
-          // 延迟执行定位,等待DOM更新
-          setTimeout(() => {
-            const messageEl = messageRefs.current[targetMessageIndex];
-            if (messageEl) {
-              scrollToMessageInPanel(messageEl);
-
-              setSelectedMessageIndex(targetMessageIndex);
-
-              if (highlight) {
-                messageEl.classList.add('highlight-from-search');
-                setTimeout(() => {
-                  messageEl.classList.remove('highlight-from-search');
-                }, 3000);
-              }
-            } else {
-              console.warn(`[消息定位] 切换分支后仍未找到消息元素: ${targetMessageIndex}`);
-              // 可能需要更多时间等待渲染
-              setTimeout(() => {
-                const el = messageRefs.current[targetMessageIndex];
-                if (el) {
-                  scrollToMessageInPanel(el);
-                  setSelectedMessageIndex(targetMessageIndex);
-                  if (highlight) {
-                    el.classList.add('highlight-from-search');
-                    setTimeout(() => el.classList.remove('highlight-from-search'), 3000);
-                  }
-                }
-              }, 300);
-            }
-          }, 600);
-        } else {
-          console.warn(`[消息定位] 未找到包含该消息的分支,显示所有分支`);
-          // 如果没找到分支,显示所有分支
-          handleShowAllBranches();
-
-          // 延迟执行定位
-          setTimeout(() => {
-            const messageEl = messageRefs.current[targetMessageIndex];
-            if (messageEl) {
-              scrollToMessageInPanel(messageEl);
-
-              setSelectedMessageIndex(targetMessageIndex);
-
-              if (highlight) {
-                messageEl.classList.add('highlight-from-search');
-                setTimeout(() => {
-                  messageEl.classList.remove('highlight-from-search');
-                }, 3000);
-              }
-            }
-          }, 600);
-        }
-      } else {
-        // 消息在当前分支中可见,直接定位
-        console.log(`[消息定位] 消息在当前分支中,直接定位`);
-        const messageEl = messageRefs.current[targetMessageIndex];
-        if (!messageEl) {
-          console.warn(`[消息定位] 未找到消息元素: ${targetMessageIndex}`);
-          // 可能需要等待DOM渲染
-          setTimeout(() => {
-            const el = messageRefs.current[targetMessageIndex];
-            if (el) {
-              scrollToMessageInPanel(el);
-
-              setSelectedMessageIndex(targetMessageIndex);
-
-              if (highlight) {
-                el.classList.add('highlight-from-search');
-                setTimeout(() => {
-                  el.classList.remove('highlight-from-search');
-                }, 3000);
-              }
-            } else {
-              console.warn(`[消息定位] 延迟后仍未找到元素`);
-            }
-          }, 200);
-          return;
-        }
-
-        // 滚动到视图中心
-        scrollToMessageInPanel(messageEl);
-
-        // 设置选中状态
-        setSelectedMessageIndex(targetMessageIndex);
-
-        // 添加高亮效果
-        if (highlight) {
-          messageEl.classList.add('highlight-from-search');
-          setTimeout(() => {
-            messageEl.classList.remove('highlight-from-search');
-          }, 3000);
-        }
-      }
+      if (!event.detail || typeof event.detail !== 'object') return;
+      setLocatorRequest({ ...event.detail });
     };
 
     window.addEventListener('scrollToMessage', handleScrollToMessage);
     return () => window.removeEventListener('scrollToMessage', handleScrollToMessage);
-  }, [messages, displayMessages, branchAnalysis, handleShowAllBranches, showAllBranches, onBranchStateChange, branchStateKey, scrollToMessageInPanel]);
+  }, []);
+
+  useEffect(() => {
+    if (!locatorRequest || messages.length === 0) return;
+
+    const {
+      messageIndex,
+      messageId,
+      messageUuid,
+      highlight,
+      fileIndex,
+      conversationUuid
+    } = locatorRequest;
+
+    const targetMessage = findMessageByLocator(messages, {
+      messageUuid,
+      messageId,
+      messageIndex,
+      fileIndex,
+      conversationUuid
+    });
+
+    if (!targetMessage) {
+      console.warn('[消息定位] 当前已加载对话中不存在目标消息', {
+        messageUuid,
+        messageId,
+        messageIndex,
+        fileIndex,
+        conversationUuid
+      });
+      setLocatorRequest(null);
+      return;
+    }
+
+    const isVisible = displayMessages.some(msg => msg.uuid === targetMessage.uuid);
+
+    if (!isVisible && branchAnalysis.branchPoints.size > 0 && !showAllBranches) {
+      const foundBranch = Array.from(branchAnalysis.branchPoints.values()).some(branchData =>
+        branchData.branches.some(branch =>
+          branch.messages.some(msg => msg.uuid === targetMessage.uuid)
+        )
+      );
+
+      if (foundBranch) {
+        const newBranchFilters = computeBranchFiltersForMessage(
+          targetMessage,
+          messages,
+          branchAnalysis
+        );
+        setBranchFilters(newBranchFilters);
+        setShowAllBranches(false);
+
+        if (onBranchStateChange) {
+          onBranchStateChange({
+            showAllBranches: false,
+            currentBranchIndexes: newBranchFilters,
+            conversationUuid: branchStateKey
+          });
+        }
+      } else {
+        // A real target that is outside all detected branch groups can only be
+        // exposed by the explicit all-message projection.
+        setShowAllBranches(true);
+        setBranchFilters(new Map());
+
+        if (onBranchStateChange) {
+          onBranchStateChange({
+            showAllBranches: true,
+            currentBranchIndexes: new Map(),
+            conversationUuid: branchStateKey
+          });
+        }
+      }
+    }
+
+    setPendingMessageFocus({
+      uuid: targetMessage.uuid,
+      index: targetMessage.index,
+      highlight: !!highlight
+    });
+    setLocatorRequest(null);
+  }, [
+    locatorRequest,
+    messages,
+    displayMessages,
+    branchAnalysis,
+    showAllBranches,
+    onBranchStateChange,
+    branchStateKey
+  ]);
+
+  // React refs are populated before effects run. requestAnimationFrame waits for
+  // the committed layout without relying on an arbitrary millisecond delay.
+  useEffect(() => {
+    if (!pendingMessageFocus) return;
+    if (!displayMessages.some(msg => msg.uuid === pendingMessageFocus.uuid)) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      const messageEl = messageRefs.current[pendingMessageFocus.index];
+      if (!messageEl) {
+        console.warn('[消息定位] 已显示目标消息但 DOM 引用缺失', pendingMessageFocus);
+        setPendingMessageFocus(null);
+        return;
+      }
+
+      scrollToMessageInPanel(messageEl);
+      setSelectedMessageIndex(pendingMessageFocus.index);
+
+      if (pendingMessageFocus.highlight) {
+        messageEl.classList.add('highlight-from-search');
+        setTimeout(() => messageEl.classList.remove('highlight-from-search'), 3000);
+      }
+
+      setPendingMessageFocus(null);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [pendingMessageFocus, displayMessages, scrollToMessageInPanel]);
 
   // 只恢复当前对话自己的分支状态，避免固定 ROOT_UUID 跨对话串线。
   useEffect(() => {
@@ -674,7 +622,7 @@ const ConversationTimeline = ({
   }, [branchAnalysis.branchPoints, branchFilters.size, showAllBranches, branchState, branchStateKey]);
 
   useEffect(() => {
-    if (messages.length > 0 && !selectedMessageIndex) {
+    if (messages.length > 0 && selectedMessageIndex === null) {
       setSelectedMessageIndex(messages[0].index);
     }
   }, [messages, selectedMessageIndex]);
@@ -782,111 +730,24 @@ const ConversationTimeline = ({
     setShowRenameDialog(false);
   };
 
-  // 跳转到最新对话分支
+  // 跳转到解析器顺序中的最后一条消息。使用稳定 index，
+  // 避免本地化 timestamp 改变“最新”判断。
   const handleJumpToLatest = useCallback(() => {
-    if (!messages || messages.length === 0) {
-      console.warn('[跳转到最新] 没有可用的消息');
-      return;
-    }
+    if (!messages || messages.length === 0) return;
 
-    // 找到时间戳最新的消息（按时间排序，取最后一个）
-    const sortedMessages = [...messages].sort((a, b) => {
-      const timeA = new Date(a.timestamp).getTime();
-      const timeB = new Date(b.timestamp).getTime();
-      return timeA - timeB;
-    });
+    const latestMessage = messages.reduce((latest, message) =>
+      message.index > latest.index ? message : latest
+    );
 
-    const latestMessage = sortedMessages[sortedMessages.length - 1];
-    console.log(`[跳转到最新] 找到最新消息 - index: ${latestMessage.index}, uuid: ${latestMessage.uuid}, timestamp: ${latestMessage.timestamp}`);
-
-    // 检查消息是否在当前显示的消息中
-    const isMessageVisible = displayMessages.some(msg => msg.uuid === latestMessage.uuid);
-
-    if (!isMessageVisible && branchAnalysis.branchPoints.size > 0 && !showAllBranches) {
-      // 消息不在当前分支，需要切换分支
-      console.log(`[跳转到最新] 消息不在当前分支，尝试切换分支...`);
-
-      const newBranchFilters = computeBranchFiltersForMessage(latestMessage, messages, branchAnalysis);
-      console.log(`[跳转到最新] 批量更新分支过滤器:`, Array.from(newBranchFilters.entries()));
-
-      // 批量更新所有分支过滤器
-      setBranchFilters(newBranchFilters);
-      setShowAllBranches(false);
-
-      // 通知父组件
-      if (onBranchStateChange) {
-        onBranchStateChange({
-          showAllBranches: false,
-          currentBranchIndexes: newBranchFilters,
-          conversationUuid: branchStateKey
-        });
+    window.dispatchEvent(new CustomEvent('scrollToMessage', {
+      detail: {
+        messageIndex: latestMessage.index,
+        messageUuid: latestMessage.uuid,
+        highlight: true,
+        conversationUuid: branchStateKey
       }
-
-      // 延迟执行定位，等待DOM更新
-      setTimeout(() => {
-        const messageEl = messageRefs.current[latestMessage.index];
-        if (messageEl) {
-          scrollToMessageInPanel(messageEl);
-
-          setSelectedMessageIndex(latestMessage.index);
-
-          // 添加高亮效果
-          messageEl.classList.add('highlight-from-search');
-          setTimeout(() => {
-            messageEl.classList.remove('highlight-from-search');
-          }, 3000);
-        } else {
-          console.warn(`[跳转到最新] 切换分支后仍未找到消息元素: ${latestMessage.index}`);
-          // 可能需要更多时间等待渲染
-          setTimeout(() => {
-            const el = messageRefs.current[latestMessage.index];
-            if (el) {
-              scrollToMessageInPanel(el);
-              setSelectedMessageIndex(latestMessage.index);
-              el.classList.add('highlight-from-search');
-              setTimeout(() => el.classList.remove('highlight-from-search'), 3000);
-            }
-          }, 300);
-        }
-      }, 600);
-    } else {
-      // 消息在当前分支中可见，直接定位
-      console.log(`[跳转到最新] 消息在当前分支中，直接定位`);
-      const messageEl = messageRefs.current[latestMessage.index];
-      if (!messageEl) {
-        console.warn(`[跳转到最新] 未找到消息元素: ${latestMessage.index}`);
-        // 可能需要等待DOM渲染
-        setTimeout(() => {
-          const el = messageRefs.current[latestMessage.index];
-          if (el) {
-            scrollToMessageInPanel(el);
-
-            setSelectedMessageIndex(latestMessage.index);
-
-            el.classList.add('highlight-from-search');
-            setTimeout(() => {
-              el.classList.remove('highlight-from-search');
-            }, 3000);
-          } else {
-            console.warn(`[跳转到最新] 延迟后仍未找到元素`);
-          }
-        }, 200);
-        return;
-      }
-
-      // 滚动到视图中心
-      scrollToMessageInPanel(messageEl);
-
-      // 设置选中状态
-      setSelectedMessageIndex(latestMessage.index);
-
-      // 添加高亮效果
-      messageEl.classList.add('highlight-from-search');
-      setTimeout(() => {
-        messageEl.classList.remove('highlight-from-search');
-      }, 3000);
-    }
-  }, [messages, displayMessages, branchAnalysis, showAllBranches, onBranchStateChange, branchStateKey, scrollToMessageInPanel]);
+    }));
+  }, [messages, branchStateKey]);
 
   // ==================== 工具函数 ====================
 
