@@ -41,7 +41,8 @@
     "build:extension": "node scripts/run-build.mjs extension",
     "build:firefox": "node scripts/run-build.mjs firefox",
     "predeploy": "npm run build",
-    "deploy": "gh-pages -d build"
+    "deploy": "gh-pages -d build",
+    "build:all": "node scripts/run-build.mjs all"
   },
   "eslintConfig": {
     "extends": [
