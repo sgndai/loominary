@@ -1070,9 +1070,7 @@ function App() {
       fileActions.switchFile(targetFileIndex);
     }
 
-    if (targetConversationUuid) {
-      setSelectedConversationUuid(targetConversationUuid);
-    }
+    setSelectedConversationUuid(targetConversationUuid);
 
     // Navigation is completed by state observation below. No guessed delay is
     // needed: the event is dispatched only when the requested file has actually
