@@ -12,16 +12,25 @@ const TRANSLATIONS = {
   zh: zhTranslations,
 };
 
-const DEFAULT_LANG = 'en';
+const DEFAULT_LANG = 'zh';
+const LANGUAGE_STORAGE_KEY = 'loominary-language';
 
 // Language is read once from chrome.storage at startup (set there by the userscript)
 // setResolvedLang allows the App to switch language after a postMessage payload arrives.
-let resolvedLang = DEFAULT_LANG;
+let resolvedLang = (() => {
+  try {
+    const stored = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    return TRANSLATIONS[stored] ? stored : DEFAULT_LANG;
+  } catch (_) {
+    return DEFAULT_LANG;
+  }
+})();
 let _langListeners = [];
 export function setResolvedLang(lang) {
   const next = TRANSLATIONS[lang] ? lang : DEFAULT_LANG;
   if (next === resolvedLang) return;
   resolvedLang = next;
+  try { localStorage.setItem(LANGUAGE_STORAGE_KEY, next); } catch (_) {}
   _langListeners.forEach(fn => fn(next));
 }
 export function subscribeLang(fn) {
@@ -70,7 +79,11 @@ const isWelcomePage = window.location.pathname.endsWith('/welcome') || window.lo
   || window.location.hash === '#/welcome';
 
 function boot(lang) {
-  resolvedLang = TRANSLATIONS[lang] ? lang : DEFAULT_LANG;
+  const stored = (() => {
+    try { return localStorage.getItem(LANGUAGE_STORAGE_KEY); } catch (_) { return null; }
+  })();
+  resolvedLang = TRANSLATIONS[lang] ? lang : (TRANSLATIONS[stored] ? stored : DEFAULT_LANG);
+  try { localStorage.setItem(LANGUAGE_STORAGE_KEY, resolvedLang); } catch (_) {}
   const root = ReactDOM.createRoot(document.getElementById('root'));
   root.render(
     <React.StrictMode>
@@ -87,5 +100,5 @@ if (chromeApi && chromeApi.storage && chromeApi.storage.local) {
     boot(result.loominary_lang || DEFAULT_LANG);
   });
 } else {
-  boot(DEFAULT_LANG);
+  boot(resolvedLang);
 }
