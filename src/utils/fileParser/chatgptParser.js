@@ -60,22 +60,129 @@ const applyContentReferences = (text, metadata) => {
 };
 
 // ==================== ChatGPT 解析器 ====================
+
+const REDACTED_PLACEHOLDERS = new Set([
+  'The output of this plugin was redacted.'
+]);
+
+const cloneTool = tool => ({ ...tool });
+
+const cloneTraversalState = state => ({
+  pendingThinking: state.pendingThinking,
+  pendingTools: state.pendingTools.map(cloneTool),
+  pendingAttachments: [...state.pendingAttachments],
+  pendingAssistantGeneratedImages: [...state.pendingAssistantGeneratedImages],
+  lastUserMessage: state.lastUserMessage
+});
+
+const createTraversalState = () => ({
+  pendingThinking: '',
+  pendingTools: [],
+  pendingAttachments: [],
+  pendingAssistantGeneratedImages: [],
+  lastUserMessage: null
+});
+
+const textFromPart = part => {
+  if (typeof part === 'string') return part;
+  if (!part || typeof part !== 'object') return '';
+  if (typeof part.text === 'string') return part.text;
+  if (typeof part.content === 'string') return part.content;
+  if (typeof part.caption === 'string') return part.caption;
+  return '';
+};
+
+const extractTextFromContent = content => {
+  if (!content || typeof content !== 'object') return '';
+  if (Array.isArray(content.parts)) {
+    return content.parts.map(textFromPart).filter(Boolean).join('');
+  }
+  if (typeof content.content === 'string') return content.content;
+  if (typeof content.text === 'string') return content.text;
+  return '';
+};
+
+const pointerAttachmentFromPart = (part, index) => {
+  if (!part || typeof part !== 'object') return null;
+  const pointer = part.asset_pointer || part.file_id || part.url || part.location;
+  const type = part.content_type || part.type || '';
+  if (!pointer || !(
+    type === 'image_asset_pointer' ||
+    type === 'file' ||
+    type === 'file_attachment' ||
+    part.asset_pointer ||
+    part.file_id
+  )) {
+    return null;
+  }
+
+  const mimeType = part.mime_type || part.file_type || part.format ||
+    (type === 'image_asset_pointer' ? 'image/*' : 'application/octet-stream');
+  const fileName = part.name || part.file_name ||
+    (type === 'image_asset_pointer' ? `image_${index + 1}` : `attachment_${index + 1}`);
+
+  return {
+    id: String(pointer),
+    file_name: fileName,
+    file_size: Number(part.size || part.file_size || 0),
+    file_type: mimeType,
+    extracted_content: '',
+    link: String(pointer),
+    has_link: true,
+    is_embedded_image: type === 'image_asset_pointer' || String(mimeType).startsWith('image/')
+  };
+};
+
+const extractContentAttachments = content => {
+  if (!content || !Array.isArray(content.parts)) return [];
+  return content.parts
+    .map(pointerAttachmentFromPart)
+    .filter(Boolean);
+};
+
+const appendUniqueAttachments = (target, items) => {
+  if (!Array.isArray(target) || !Array.isArray(items) || items.length === 0) return;
+  const seen = new Set(target.map(item => [item?.id, item?.file_name, item?.link].join('|')));
+  for (const item of items) {
+    const key = [item?.id, item?.file_name, item?.link].join('|');
+    if (!seen.has(key)) {
+      seen.add(key);
+      target.push(item);
+    }
+  }
+};
+
+const isTechnicalAssistantRecipient = recipient =>
+  typeof recipient === 'string' && recipient.length > 0 && recipient !== 'all';
+
+const shouldHideAssistantTextNode = (msg, metadata, rawText) => {
+  const trimmed = (rawText || '').trim();
+  if (metadata?.is_thinking_preamble_message === true) return true;
+  if (isTechnicalAssistantRecipient(msg?.recipient)) return true;
+  if (!trimmed && !Array.isArray(metadata?.attachments)) return true;
+  if (REDACTED_PLACEHOLDERS.has(trimmed)) return true;
+  return false;
+};
+
 /**
- * 解析 ChatGPT 对话导出格式
- * ChatGPT 导出包含 mapping 字典，每个节点包含 message 数据以及父子关系。
- * @param {Object} jsonData - ChatGPT 导出的原始 JSON
- * @param {String} fileName - 文件名，用于默认标题
+ * 解析 ChatGPT 对话导出格式。
+ * 可见消息只保留用户内容和真正的助手阅读内容；工具调用、推理节点和进度节点
+ * 保留在 raw_data 或附着到对应助手回复上，不独占阅读卡片。
  */
 export const extractChatGPTData = (jsonData, fileName = '') => {
   try {
     const mapping = jsonData.mapping || {};
     const title = jsonData.title || fileName.replace(/\.(jsonl|json)$/i, '') || 'ChatGPT 对话';
-    const createdAt = jsonData.create_time ? DateTimeUtils.formatDateTime(new Date(jsonData.create_time * 1000).toISOString()) : DateTimeUtils.formatDateTime(new Date().toISOString());
+    const createdAt = jsonData.create_time
+      ? DateTimeUtils.formatDateTime(new Date(jsonData.create_time * 1000).toISOString())
+      : DateTimeUtils.formatDateTime(new Date().toISOString());
 
     const metaInfo = {
       title,
       created_at: createdAt,
-      updated_at: jsonData.update_time ? DateTimeUtils.formatDateTime(new Date(jsonData.update_time * 1000).toISOString()) : createdAt,
+      updated_at: jsonData.update_time
+        ? DateTimeUtils.formatDateTime(new Date(jsonData.update_time * 1000).toISOString())
+        : createdAt,
       project_uuid: '',
       uuid: jsonData.conversation_id || jsonData.id || '',
       model: jsonData.default_model_slug || '',
@@ -86,394 +193,311 @@ export const extractChatGPTData = (jsonData, fileName = '') => {
 
     const chatHistory = [];
     let messageIndex = 0;
-
-    // 定义一个统一的根UUID，用于挂接首轮分支的根节点
     const ROOT_UUID = PARSER_CONFIG.ROOT_UUID;
-
-    // 保存 nodeId 到消息对象的映射，便于设置 parent_uuid
     const nodeIdToMessage = new Map();
-    let lastUserMessage = null;
 
-    // 用于缓存当前助手消息的思考内容和工具调用
-    let pendingThinking = '';
-    let pendingTools = [];
-    // 用于缓存assistant消息的推理概要内容（reasoning_recap）。
-    // reasoning_recap 通常只是表示"已思考X秒"等信息，不应该单独生成消息，否则会导致分支预览显示该概要内容。
-    // 我们在生成最终输出消息时，将其作为前缀添加到display_text中。
-    let pendingRecap = '';
-
-    // 用于缓存由工具产生的附件。这些附件应在下一条助手最终输出消息上附加。
-    // 部分工具（如 python_user_visible、web.run 等）会在 tool 消息的 metadata.attachments 中提供文件列表。
-    let pendingAttachments = [];
-    
-    // 用于缓存助手生成的图片（关联到用户消息的 assistant_generated）
-    let pendingAssistantGeneratedImages = [];
-
-    /**
-     * 寻找某节点祖先链上最近的已生成消息，用于确定 parent_uuid
-     * @param {string} parentId - 当前节点的父 nodeId
-     * @returns {string} 消息的 uuid，如果不存在则返回空字符串
-     */
-    const findNearestMessageUuid = (parentId) => {
+    const findNearestMessageUuid = parentId => {
       let currentId = parentId;
-      while (currentId) {
-        if (nodeIdToMessage.has(currentId)) {
-          return nodeIdToMessage.get(currentId).uuid;
-        }
+      const visited = new Set();
+      while (currentId && !visited.has(currentId)) {
+        visited.add(currentId);
+        if (nodeIdToMessage.has(currentId)) return nodeIdToMessage.get(currentId).uuid;
         const parentNode = mapping[currentId];
-        currentId = parentNode && parentNode.parent ? parentNode.parent : null;
+        currentId = parentNode?.parent || null;
       }
       return '';
     };
 
-    // 找出所有根节点（没有 parent 或 parent 不存在于 mapping 中）
     const rootNodeIds = [];
     for (const nodeId in mapping) {
       const node = mapping[nodeId];
-      if (!node || !node.parent || !(node.parent in mapping)) {
-        rootNodeIds.push(nodeId);
-      }
+      if (!node || !node.parent || !(node.parent in mapping)) rootNodeIds.push(nodeId);
     }
 
-    /**
-     * 解析助手的 "code" 类消息，将其转换为工具调用对象
-     * @param {object} msg - 节点的 message 对象
-     * @returns {object|null} 工具调用对象，或 null
-     */
-    const parseToolFromCode = (msg) => {
+    const parseToolFromAssistant = msg => {
       const content = msg.content || {};
-      // 尝试从 metadata.search_queries 或 content.text 中提取
       const metadata = msg.metadata || {};
-      if (metadata.search_queries && Array.isArray(metadata.search_queries) && metadata.search_queries.length > 0) {
+      const recipient = msg.recipient;
+      const toolName = isTechnicalAssistantRecipient(recipient) ? recipient : null;
+
+      if (Array.isArray(metadata.search_queries) && metadata.search_queries.length > 0) {
         return {
-          name: 'search',
-          input: metadata.search_queries.map(q => ({ q: q.q || q })),
+          name: toolName || 'search',
+          input: metadata.search_queries.map(q => ({ q: q?.q || q })),
           result: null
         };
       }
-      const text = content.text || (Array.isArray(content.parts) ? content.parts.join('') : '');
-      if (text) {
-        try {
-          const obj = JSON.parse(text);
-          return {
-            name: 'search',
-            input: obj.search_query || obj.query || obj,
-            result: null
-          };
-        } catch (e) {
-          return {
-            name: 'code',
-            input: text,
-            result: null
-          };
-        }
+
+      const text = extractTextFromContent(content);
+      if (!text) return toolName ? { name: toolName, input: {}, result: null } : null;
+
+      try {
+        const parsed = JSON.parse(text);
+        return {
+          name: toolName || 'tool',
+          input: parsed.search_query || parsed.query || parsed,
+          result: null
+        };
+      } catch (_) {
+        return {
+          name: toolName || 'code',
+          input: text,
+          result: null
+        };
       }
-      return null;
     };
 
-    // 递归遍历节点，深度优先
-    const traverse = (nodeId) => {
+    const attachLoominaryImages = (node, messageData, state, role) => {
+      const groups = node?.loominary_images;
+      if (!groups || typeof groups !== 'object') return;
+
+      if (role === 'user') {
+        if (Array.isArray(groups.user)) {
+          messageData.attachments = messageData.attachments.filter(att => !att.is_embedded_image);
+          groups.user.forEach((img, idx) => {
+            const attachment = processLoominaryImage(img, idx, 'user_image');
+            if (attachment) {
+              appendUniqueAttachments(messageData.attachments, [attachment]);
+              metaInfo.has_embedded_images = true;
+              metaInfo.images_processed += 1;
+            }
+          });
+        }
+        if (Array.isArray(groups.assistant_generated)) {
+          state.pendingAssistantGeneratedImages = [...groups.assistant_generated];
+        }
+        return;
+      }
+
+      if (role === 'assistant' && Array.isArray(groups.assistant)) {
+        messageData.attachments = messageData.attachments.filter(att => !att.is_embedded_image);
+        groups.assistant.forEach((img, idx) => {
+          const attachment = processLoominaryImage(img, idx, 'assistant_image');
+          if (attachment) {
+            appendUniqueAttachments(messageData.attachments, [attachment]);
+            metaInfo.has_embedded_images = true;
+            metaInfo.images_processed += 1;
+          }
+        });
+      }
+    };
+
+    const consumeGeneratedImages = (messageData, state) => {
+      if (state.pendingAssistantGeneratedImages.length === 0) return;
+      state.pendingAssistantGeneratedImages.forEach((img, idx) => {
+        const attachment = processLoominaryImage(img, idx, 'generated');
+        if (attachment) {
+          appendUniqueAttachments(messageData.attachments, [attachment]);
+          metaInfo.has_embedded_images = true;
+          metaInfo.images_processed += 1;
+        }
+      });
+      state.pendingAssistantGeneratedImages = [];
+    };
+
+    const processToolResult = (msg, state) => {
+      const metadata = msg.metadata || {};
+      const groups = metadata.search_result_groups;
+      const resultObj = {};
+
+      if (Array.isArray(groups)) {
+        const domainMap = {};
+        groups.forEach(group => {
+          const entries = Array.isArray(group?.entries) ? group.entries : [];
+          entries.forEach(entry => {
+            const url = entry?.url || '';
+            let domain = String(group?.domain || '').trim();
+            if (!domain && typeof url === 'string') {
+              const match = url.match(/^(?:https?:\/\/)?([^/]+)/i);
+              domain = match?.[1] || '';
+            }
+            if (!domainMap[domain]) domainMap[domain] = [];
+            domainMap[domain].push({
+              url,
+              title: entry?.title || '',
+              snippet: entry?.snippet || '',
+              pub_date: entry?.pub_date || null,
+              attribution: entry?.attribution || ''
+            });
+          });
+        });
+        resultObj.groups = Object.keys(domainMap).map(domain => ({
+          domain,
+          entries: domainMap[domain]
+        }));
+      }
+
+      if (Array.isArray(metadata?.search_model_queries?.queries)) {
+        resultObj.queries = metadata.search_model_queries.queries.map(q => q?.q || q);
+      }
+
+      const contentText = extractTextFromContent(msg.content || {});
+      if (contentText) resultObj.text = contentText;
+
+      if (state.pendingTools.length > 0) {
+        state.pendingTools[state.pendingTools.length - 1].result =
+          Object.keys(resultObj).length > 0 ? resultObj : (msg.content || {});
+      } else {
+        state.pendingTools.push({
+          name: msg.author?.name || 'tool',
+          input: {},
+          result: Object.keys(resultObj).length > 0 ? resultObj : (msg.content || {})
+        });
+      }
+
+      if (Array.isArray(metadata.attachments)) {
+        appendUniqueAttachments(state.pendingAttachments, processAttachments(metadata.attachments));
+      }
+    };
+
+    const traverse = (nodeId, incomingState) => {
       const node = mapping[nodeId];
       if (!node) return;
+
+      const state = cloneTraversalState(incomingState);
       const msg = node.message;
 
-      // 当 message 存在时才处理消息内容，但无论如何都要遍历子节点
       if (msg) {
         const author = msg.author || {};
         const role = author.role;
         const metadata = msg.metadata || {};
 
-        // 如果该消息被标记为对话中隐藏，则跳过对话解析，但仍需遍历子节点
-        if (metadata && metadata.is_visually_hidden_from_conversation) {
-          if (node.children && Array.isArray(node.children)) {
-            node.children.forEach(childId => traverse(childId));
-          }
-          return;
-        }
-
-        // === 系统消息：用于把附件附加到最近的用户消息 ===
-        if (role === 'system') {
-          if (!metadata?.is_visually_hidden_from_conversation && Array.isArray(metadata?.attachments) && lastUserMessage) {
-            processAttachments(metadata.attachments).forEach(att => {
-              lastUserMessage.attachments.push(att);
-            });
-          }
-        }
-        // === 用户消息 ===
-        else if (role === 'user') {
-          // 新一轮用户消息开始，重置 pendingThinking、pendingTools、pendingRecap
-          pendingThinking = '';
-          pendingTools = [];
-          pendingRecap = '';
-
-          const uuid = msg.id || nodeId;
-          let parentUuid = findNearestMessageUuid(node.parent);
-          if (!parentUuid) parentUuid = ROOT_UUID;
-          const timestamp = msg.create_time ? DateTimeUtils.formatDateTime(new Date(msg.create_time * 1000).toISOString()) : '';
-
-          // 处理用户文本内容
-          const content = msg.content || {};
-          const contentType = content.content_type || '';
-          let rawText = '';
-          if (contentType === 'text') {
-            rawText = Array.isArray(content.parts) ? content.parts.join('') : (content.content || '');
-          } else {
-            rawText = content.content || (Array.isArray(content.parts) ? content.parts.join('') : '');
-          }
-
-          // 替换 content_references 引用
-          rawText = applyContentReferences(rawText, metadata);
-
-          const messageData = new MessageBuilder(messageIndex++, uuid, parentUuid, 'human', 'User', timestamp)
-            .setContent(rawText)
-            .addCitations(metadata)
-            .addAttachments(metadata)
-            .finalize(true);
-
-          messageData._node_id = nodeId;
-
-          // 处理 Loominary 导出的图片数据
-          if (node.loominary_images) {
-            if (Array.isArray(node.loominary_images.user)) {
-              messageData.attachments = messageData.attachments.filter(att => !att.is_embedded_image);
-              node.loominary_images.user.forEach((img, idx) => {
-                const attachment = processLoominaryImage(img, idx, 'user_image');
-                if (attachment) {
-                  messageData.attachments.push(attachment);
-                  metaInfo.has_embedded_images = true;
-                  metaInfo.images_processed = (metaInfo.images_processed || 0) + 1;
-                }
-              });
+        if (!metadata.is_visually_hidden_from_conversation) {
+          if (role === 'system') {
+            if (Array.isArray(metadata.attachments) && state.lastUserMessage) {
+              appendUniqueAttachments(
+                state.lastUserMessage.attachments,
+                processAttachments(metadata.attachments)
+              );
             }
-            if (Array.isArray(node.loominary_images.assistant_generated)) {
-              pendingAssistantGeneratedImages = node.loominary_images.assistant_generated;
-            }
-          }
+          } else if (role === 'user') {
+            state.pendingThinking = '';
+            state.pendingTools = [];
+            state.pendingAttachments = [];
+            state.pendingAssistantGeneratedImages = [];
 
-          chatHistory.push(messageData);
-          nodeIdToMessage.set(nodeId, messageData);
-          lastUserMessage = messageData;
-        }
-        // === 助手消息 ===
-        else if (role === 'assistant') {
-          const content = msg.content || {};
-          const contentType = content.content_type || '';
-
-          // 遇到 model_editable_context：重置 pending 状态并跳过生成
-          if (contentType === 'model_editable_context') {
-            pendingThinking = '';
-            pendingTools = [];
-            pendingRecap = '';
-          }
-          // 累积思考内容
-          else if (contentType === 'thoughts' && content.thoughts) {
-            const joined = content.thoughts.map(th => {
-              let s = '';
-              if (th.summary) s += th.summary + '\n';
-              if (th.content) s += th.content;
-              return s.trim();
-            }).join('\n\n');
-            pendingThinking = pendingThinking ? pendingThinking + '\n\n' + joined : joined;
-          }
-          // code: 可能是工具调用
-          else if (contentType === 'code') {
-            const tool = parseToolFromCode(msg);
-            if (tool) {
-              pendingTools.push(tool);
-            }
-          }
-          // 工具结果：tether_browsing_search_result 或 tool_result
-          else if (contentType === 'tether_browsing_search_result' || contentType === 'tool_result') {
-            try {
-              const resultObj = typeof content === 'object' ? content : {};
-              if (pendingTools.length > 0) {
-                pendingTools[pendingTools.length - 1].result = resultObj;
-              } else {
-                pendingTools.push({ name: 'tool', input: {}, result: resultObj });
-              }
-            } catch (e) {
-              // 忽略错误
-            }
-          }
-          // reasoning_recap：保存到 pendingRecap，不生成单独消息
-          else if (contentType === 'reasoning_recap') {
-            let recapText = '';
-            if (Array.isArray(content.parts)) {
-              recapText = content.parts.join('');
-            } else if (typeof content.content === 'string') {
-              recapText = content.content;
-            } else if (content.text) {
-              recapText = content.text;
-            }
-            pendingRecap = recapText.trim();
-          }
-          // 其他：当成最终输出生成一条助手消息
-          else {
             const uuid = msg.id || nodeId;
             let parentUuid = findNearestMessageUuid(node.parent);
             if (!parentUuid) parentUuid = ROOT_UUID;
-            const timestamp = msg.create_time ? DateTimeUtils.formatDateTime(new Date(msg.create_time * 1000).toISOString()) : '';
+            const timestamp = msg.create_time
+              ? DateTimeUtils.formatDateTime(new Date(msg.create_time * 1000).toISOString())
+              : '';
+            const content = msg.content || {};
+            let rawText = applyContentReferences(extractTextFromContent(content), metadata);
 
-            // 处理文本内容
-            let rawText = '';
-            let imageAttachment = null;
-            if (contentType === 'text' || contentType === 'code') {
-              rawText = Array.isArray(content.parts) ? content.parts.join('') : (content.content || content.text || '');
-            } else if (contentType === 'image_file') {
-              const fileId = content.file_id || content.fileID || '';
-              const fileName = content.name || content.file_name || 'image';
-              imageAttachment = {
-                id: fileId,
-                file_name: fileName,
-                file_size: content.size || 0,
-                file_type: content.mimeType || 'image/png',
-                extracted_content: '',
-                link: fileId || '',
-                has_link: !!fileId
-              };
-              rawText = `[图片: ${fileName}]`;
-            } else {
-              try { rawText = JSON.stringify(content); } catch (e) { rawText = ''; }
-            }
-
-            // 替换 content_references 引用
-            rawText = applyContentReferences(rawText, metadata);
-
-            const messageData = new MessageBuilder(messageIndex++, uuid, parentUuid, 'assistant', 'ChatGPT', timestamp)
+            const messageData = new MessageBuilder(
+              messageIndex++,
+              uuid,
+              parentUuid,
+              'human',
+              'User',
+              timestamp
+            )
               .setContent(rawText)
-              .setThinking(pendingThinking)
               .addCitations(metadata)
               .addAttachments(metadata)
-              .addTools(pendingTools.map(t => ({ ...t })))
-              .finalize(false);
+              .finalize(true);
 
             messageData._node_id = nodeId;
-            if (imageAttachment) messageData.attachments.unshift(imageAttachment);
-            if (pendingAttachments.length > 0) {
-              messageData.attachments.push(...pendingAttachments);
-              pendingAttachments = [];
-            }
-            
-            // 处理之前缓存的助手生成图片
-            if (pendingAssistantGeneratedImages.length > 0) {
-              pendingAssistantGeneratedImages.forEach((img, idx) => {
-                const attachment = processLoominaryImage(img, idx, 'generated');
-                if (attachment) {
-                  messageData.attachments.push(attachment);
-                  metaInfo.has_embedded_images = true;
-                  metaInfo.images_processed = (metaInfo.images_processed || 0) + 1;
-                }
-              });
-              pendingAssistantGeneratedImages = [];
-            }
-
-            // 处理 Loominary 导出的助手图片数据
-            if (node.loominary_images && Array.isArray(node.loominary_images.assistant)) {
-              messageData.attachments = messageData.attachments.filter(att => !att.is_embedded_image);
-              node.loominary_images.assistant.forEach((img, idx) => {
-                const attachment = processLoominaryImage(img, idx, 'assistant_image');
-                if (attachment) {
-                  messageData.attachments.push(attachment);
-                  metaInfo.has_embedded_images = true;
-                  metaInfo.images_processed = (metaInfo.images_processed || 0) + 1;
-                }
-              });
-            }
+            appendUniqueAttachments(messageData.attachments, extractContentAttachments(content));
+            attachLoominaryImages(node, messageData, state, 'user');
 
             chatHistory.push(messageData);
             nodeIdToMessage.set(nodeId, messageData);
-          }
-        }
-        // === 工具消息 ===
-        else if (role === 'tool') {
-          const toolName = author.name || '';
-          const groups = metadata?.search_result_groups;
-          if (Array.isArray(groups)) {
-            // 重新整理 search_result_groups：缺失 domain 的根据 URL 提取并分组
-            const domainMap = {};
-            groups.forEach(grp => {
-              const entries = Array.isArray(grp.entries) ? grp.entries : [];
-              if (grp && grp.domain && String(grp.domain).trim()) {
-                const dom = String(grp.domain).trim();
-                if (!domainMap[dom]) domainMap[dom] = [];
-                entries.forEach(entry => {
-                  domainMap[dom].push({
-                    url: entry.url || '',
-                    title: entry.title || '',
-                    snippet: entry.snippet || '',
-                    pub_date: entry.pub_date || null,
-                    attribution: entry.attribution || ''
-                  });
-                });
-              } else {
-                // 无 domain，从每个条目的 url 中解析域名分组
-                entries.forEach(entry => {
-                  const url = entry.url || '';
-                  let dom = '';
-                  const match = typeof url === 'string' && url.match(/^(?:https?:\/\/)?([^\/]+)/i);
-                  if (match) dom = match[1] || '';
-                  if (!domainMap[dom]) domainMap[dom] = [];
-                  domainMap[dom].push({
-                    url: entry.url || '',
-                    title: entry.title || '',
-                    snippet: entry.snippet || '',
-                    pub_date: entry.pub_date || null,
-                    attribution: entry.attribution || ''
-                  });
-                });
+            state.lastUserMessage = messageData;
+          } else if (role === 'assistant') {
+            const content = msg.content || {};
+            const contentType = content.content_type || '';
+
+            if (contentType === 'model_editable_context') {
+              state.pendingThinking = '';
+              state.pendingTools = [];
+              state.pendingAttachments = [];
+            } else if (contentType === 'thoughts' && Array.isArray(content.thoughts)) {
+              const joined = content.thoughts
+                .map(thought => [thought?.summary, thought?.content].filter(Boolean).join('\n').trim())
+                .filter(Boolean)
+                .join('\n\n');
+              if (joined) {
+                state.pendingThinking = state.pendingThinking
+                  ? `${state.pendingThinking}\n\n${joined}`
+                  : joined;
               }
-            });
-            // 构建去重后的分组数组
-            const mappedGroups = Object.keys(domainMap).map(dom => ({
-              domain: dom || '',
-              entries: domainMap[dom]
-            }));
-            // 提取模型查询语句
-            let queries = [];
-            if (metadata?.search_model_queries && Array.isArray(metadata.search_model_queries.queries)) {
-              queries = metadata.search_model_queries.queries.map(q => q.q || q);
-            }
-
-            if (pendingTools.length > 0) {
-              const lastTool = pendingTools[pendingTools.length - 1];
-              lastTool.result = lastTool.result || {};
-              lastTool.result.groups = mappedGroups;
-              if (queries.length > 0) lastTool.result.queries = queries;
+            } else if (contentType === 'reasoning_recap') {
+              // raw_data retains the recap. It is progress metadata, not a standalone reader message.
+            } else if (
+              contentType === 'code' ||
+              isTechnicalAssistantRecipient(msg.recipient)
+            ) {
+              const tool = parseToolFromAssistant(msg);
+              if (tool) state.pendingTools.push(tool);
+              if (Array.isArray(metadata.attachments)) {
+                appendUniqueAttachments(state.pendingAttachments, processAttachments(metadata.attachments));
+              }
+            } else if (
+              contentType === 'tether_browsing_search_result' ||
+              contentType === 'tool_result' ||
+              contentType === 'execution_output'
+            ) {
+              processToolResult(msg, state);
             } else {
-              const resultObj = { groups: mappedGroups };
-              if (queries.length > 0) resultObj.queries = queries;
-              pendingTools.push({ name: toolName || 'tool', input: {}, result: resultObj });
-            }
-          }
+              const rawText = applyContentReferences(extractTextFromContent(content), metadata);
+              const contentAttachments = extractContentAttachments(content);
 
-          // 工具产生的附件暂存到 pendingAttachments
-          if (Array.isArray(metadata?.attachments)) {
-            pendingAttachments.push(...processAttachments(metadata.attachments));
+              if (!shouldHideAssistantTextNode(msg, metadata, rawText) || contentAttachments.length > 0) {
+                const uuid = msg.id || nodeId;
+                let parentUuid = findNearestMessageUuid(node.parent);
+                if (!parentUuid) parentUuid = ROOT_UUID;
+                const timestamp = msg.create_time
+                  ? DateTimeUtils.formatDateTime(new Date(msg.create_time * 1000).toISOString())
+                  : '';
+
+                const messageData = new MessageBuilder(
+                  messageIndex++,
+                  uuid,
+                  parentUuid,
+                  'assistant',
+                  'ChatGPT',
+                  timestamp
+                )
+                  .setContent(rawText)
+                  .setThinking(state.pendingThinking)
+                  .addCitations(metadata)
+                  .addAttachments(metadata)
+                  .addTools(state.pendingTools.map(cloneTool))
+                  .finalize(false);
+
+                messageData._node_id = nodeId;
+                appendUniqueAttachments(messageData.attachments, contentAttachments);
+                appendUniqueAttachments(messageData.attachments, state.pendingAttachments);
+                state.pendingAttachments = [];
+                consumeGeneratedImages(messageData, state);
+                attachLoominaryImages(node, messageData, state, 'assistant');
+
+                chatHistory.push(messageData);
+                nodeIdToMessage.set(nodeId, messageData);
+              }
+            }
+          } else if (role === 'tool') {
+            processToolResult(msg, state);
           }
-          // 工具消息不生成可见消息
         }
       }
 
-      // 递归子节点
-      if (node.children && Array.isArray(node.children)) {
-        node.children.forEach(childId => traverse(childId));
+      if (Array.isArray(node.children)) {
+        node.children.forEach(childId => traverse(childId, state));
       }
     };
 
-    // 按根节点顺序遍历
-    rootNodeIds.forEach(rootId => {
-      traverse(rootId);
-    });
+    rootNodeIds.forEach(rootId => traverse(rootId, createTraversalState()));
 
-    const processed = {
+    return {
       meta_info: metaInfo,
       chat_history: chatHistory,
       raw_data: jsonData,
       format: 'chatgpt',
       platform: 'chatgpt'
     };
-
-    return processed;
   } catch (error) {
     console.error('[ChatGPT Parser] 解析数据出错:', error);
     throw error;
