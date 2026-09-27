@@ -290,20 +290,20 @@
       "anthropicDocs": "Anthropic API文档"
     },
     "searchOptions": {
-        "title": "搜索设置",
-        "removeDuplicates": {
-          "label": "移除重复结果",
-          "description": "自动过滤重复的搜索结果，只显示唯一的消息"
-        },
-        "includeThinking": {
-          "label": "搜索思考内容",
-          "description": "在搜索时包含 Claude 的思考过程内容"
-        },
-        "includeArtifacts": {
-          "label": "搜索Artifacts内容",
-          "description": "在搜索时包含Claude创建的Artifacts"
-        }
+      "title": "搜索设置",
+      "removeDuplicates": {
+        "label": "移除重复结果",
+        "description": "自动过滤重复的搜索结果，只显示唯一的消息"
       },
+      "includeThinking": {
+        "label": "搜索思考内容",
+        "description": "在搜索时包含 Claude 的思考过程内容"
+      },
+      "includeArtifacts": {
+        "label": "搜索Artifacts内容",
+        "description": "在搜索时包含Claude创建的Artifacts"
+      }
+    },
     "nav": {
       "general": "通用",
       "export": "导出",
@@ -439,8 +439,8 @@
       "unmarkCompleted": "取消完成",
       "markImportant": "星标标记",
       "unmarkImportant": "取消重要",
-      "markDeleted": "删除标记",
-      "unmarkDeleted": "取消删除",
+      "markDeleted": "排除导出",
+      "unmarkDeleted": "恢复导出",
       "jumpToLatest": "跳转到最新",
       "previousMessage": "上一条消息",
       "nextMessage": "下一条消息"
@@ -460,7 +460,7 @@
       "citations": "个引用",
       "completed": "已完成",
       "important": "重要",
-      "deleted": "已删除"
+      "deleted": "排除导出"
     },
     "detail": {
       "selectMessage": "选择一条消息以查看详情"
