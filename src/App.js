@@ -262,6 +262,7 @@ export const useFileManager = () => {
   const [files, setFiles] = useState([]);
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [processedData, setProcessedData] = useState(null);
+  const [processedFile, setProcessedFile] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [showTypeConflictModal, setShowTypeConflictModal] = useState(false);
@@ -281,6 +282,7 @@ export const useFileManager = () => {
   useEffect(() => {
     if (!activeFile) {
       setProcessedData(null);
+      setProcessedFile(null);
       setIsLoading(false);
       return undefined;
     }
@@ -308,11 +310,13 @@ export const useFileManager = () => {
 
         if (!active) return;
         setProcessedData(data);
+        setProcessedFile(file);
       } catch (err) {
         if (!active) return;
         console.error('[Loominary processCurrentFile] 处理文件出错:', err);
         setError(err.message);
         setProcessedData(null);
+        setProcessedFile(null);
       } finally {
         if (active) setIsLoading(false);
       }
@@ -699,8 +703,9 @@ export const useFileManager = () => {
     files,
     currentFile: activeFile,
     currentFileIndex,
-    processedData,
-    isLoading,
+    processedData: processedFile === activeFile ? processedData : null,
+    processedFile,
+    isLoading: !!activeFile && processedFile !== activeFile ? true : isLoading,
     error,
     showTypeConflictModal,
     pendingFiles,
