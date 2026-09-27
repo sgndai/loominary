@@ -71,7 +71,9 @@ export function analyzeBranches(messages) {
         const sortedChildren = children
           .map(uuid => msgDict[uuid])
           .filter(msg => msg)
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+          // 分支版本顺序使用解析器生成的稳定 index。timestamp 已本地化，
+          // 不能参与拓扑排序，否则切换语言可能改变版本编号。
+          .sort((a, b) => a.index - b.index);
 
         const branches = sortedChildren.map((childMsg, branchIndex) => {
           const branchMessages = findBranchMessages(childMsg.uuid, msgDict, parentChildren);
