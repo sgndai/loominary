@@ -305,6 +305,8 @@ def userscript_header(platforms: list[str], version: str) -> str:
 {update_lines}{match_lines}
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @grant        unsafeWindow
 // @run-at       document-start
 // @license      MIT
