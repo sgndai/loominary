@@ -688,6 +688,20 @@
   box-sizing: border-box;
 }
 
+.desktop-layout.detail-closed .timeline-left-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+}
+
+.desktop-layout.detail-closed .timeline-right-panel {
+  display: none;
+}
+
+.desktop-layout.detail-closed .timeline-main-content {
+  gap: 0;
+}
+
 /* 对话信息卡片 */
 .conversation-info-card {
   background: var(--bg-secondary);
