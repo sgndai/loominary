@@ -159,7 +159,7 @@ const shouldHideAssistantTextNode = (msg, metadata, rawText) => {
   const trimmed = (rawText || '').trim();
   if (metadata?.is_thinking_preamble_message === true) return true;
   if (isTechnicalAssistantRecipient(msg?.recipient)) return true;
-  if (!trimmed && !Array.isArray(metadata?.attachments)) return true;
+  if (!trimmed && (!Array.isArray(metadata?.attachments) || metadata.attachments.length === 0)) return true;
   if (REDACTED_PLACEHOLDERS.has(trimmed)) return true;
   return false;
 };
