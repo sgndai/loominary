@@ -718,6 +718,8 @@ function App() {
     currentFile,
     currentFileIndex,
     processedData,
+    isLoading: isFileLoading,
+    error: fileError,
     fileMetadata,
     loadingProgress,
     actions: fileActions
@@ -742,7 +744,6 @@ function App() {
   const [starredConversations, setStarredConversations] = useState(new Map());
   const starManagerRef = useRef(null);
   const browseAllContextRef = useRef(null); // { userId, baseUrl }
-  const pendingSelectIndexRef = useRef(null); // 卡片点击后待选中的文件 index
   const [browseAllCurrentIndex, setBrowseAllCurrentIndex] = useState(null); // 当前在 sortedBrowseCards 中的位置
   const [hasZipData, setHasZipData] = useState(false); // 是否从 zip 导入了完整数据
   // 映射：原始对话UUID ↔ fileUuid（文件hash），用于 rename 同步
@@ -1092,15 +1093,6 @@ function App() {
   }, [currentFileIndex, selectedConversationUuid, switchToTimeline, setSelectedConversationUuid, fileActions]);
 
 
-  // 当卡片点击加载新文件后，files 数组更新时自动选中新文件
-  useEffect(() => {
-    if (pendingSelectIndexRef.current !== null && files.length > pendingSelectIndexRef.current) {
-      const idx = pendingSelectIndexRef.current;
-      pendingSelectIndexRef.current = null;
-      fileActions.switchFile(idx);
-    }
-  }, [files, fileActions]);
-
   const handleOpenSingleJson = useCallback(() => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -1115,16 +1107,16 @@ function App() {
         } catch (se) {
           console.warn('[SingleFile] Failed to save session:', se);
         }
-        const newFileIdx = fileActionsRef.current ? files.length : 0;
-        pendingSelectIndexRef.current = newFileIdx;
-        fileActionsRef.current.loadFiles([file]);
-        switchToTimeline(newFileIdx, null);
+        const result = await fileActionsRef.current.loadFiles([file], { activate: true });
+        if (result?.firstIndex >= 0) {
+          switchToTimeline(result.firstIndex, null);
+        }
       } catch (err) {
         console.error('[SingleFile] Failed to load file:', err);
       }
     };
     input.click();
-  }, [files.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [switchToTimeline]);
 
   const handleImportFolder = useCallback(async () => {
     const input = document.createElement('input');
@@ -1323,15 +1315,16 @@ function App() {
         : item.uuid.split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0) >>> 0;
       const file = new File([blob], filename, { type: 'application/json', lastModified: stableTs });
 
+      const loadResult = await fileActionsRef.current.loadFiles([file], { activate: true });
+      const newFileIdx = loadResult?.firstIndex;
+      if (!Number.isInteger(newFileIdx) || newFileIdx < 0) return;
+
       // 记录 cardUuid ↔ fileUuid 映射，用于 rename 同步
-      const newFileIdx = files.length;
       const fileUuid = generateFileCardUuid(newFileIdx, file);
       uuidMapRef.current.toFile.set(item.uuid, fileUuid);
       uuidMapRef.current.toCard.set(fileUuid, item.uuid);
       cardFileIndexMapRef.current.set(item.uuid, newFileIdx);
 
-      pendingSelectIndexRef.current = newFileIdx;
-      fileActionsRef.current.loadFiles([file]);
       const cardIdx = sortedBrowseCards.findIndex(c => c.uuid === item.uuid);
       if (cardIdx !== -1) setBrowseAllCurrentIndex(cardIdx);
       switchToTimeline(newFileIdx, null);
@@ -1912,9 +1905,10 @@ function App() {
     try {
       const blob = new Blob([session.content], { type: 'application/json' });
       const file = new File([blob], session.filename, { type: 'application/json', lastModified: Date.now() });
-      pendingSelectIndexRef.current = 0;
-      fileActionsRef.current.loadFiles([file]);
-      switchToTimeline(0, null);
+      (async () => {
+        const result = await fileActionsRef.current.loadFiles([file], { activate: true });
+        if (result?.firstIndex >= 0) switchToTimelineRef.current(result.firstIndex, null);
+      })();
     } catch (err) {
       console.error('[SingleFile] Failed to restore session:', err);
       StorageManager.remove('singlefile_session');
@@ -1925,7 +1919,7 @@ function App() {
   useEffect(() => {
     if (isExtension) return;
 
-    const handleMessage = (event) => {
+    const handleMessage = async (event) => {
       const { data } = event;
       if (!data || typeof data !== 'object') return;
 
@@ -1962,19 +1956,22 @@ function App() {
               const blob = new Blob([typeof content === 'string' ? content : JSON.stringify(content)], { type: 'application/jsonl' });
               return new File([blob], filename, { type: 'application/jsonl', lastModified: Date.now() });
             });
-            pendingSelectIndexRef.current = 0;
-            fileActionsRef.current.loadMergedJSONLFiles(fileObjs);
+            await fileActionsRef.current.loadMergedJSONLFiles(fileObjs);
           } else {
             // 单文件
             const { content, filename } = payload;
             const jsonData = typeof content === 'string' ? content : JSON.stringify(content);
             const blob = new Blob([jsonData], { type: 'application/json' });
             const file = new File([blob], filename, { type: 'application/json', lastModified: Date.now() });
-            pendingSelectIndexRef.current = 0;
-            fileActionsRef.current.loadFiles([file], { replace: true });
+            const result = await fileActionsRef.current.loadFiles([file], { replace: true, activate: true });
             try { StorageManager.set('singlefile_session', { content: jsonData, filename }); } catch (_) {}
+            if (result?.firstIndex >= 0) {
+              switchToTimelineRef.current(result.firstIndex, null);
+            }
           }
-          switchToTimelineRef.current(0, null);
+          if (payload.files && Array.isArray(payload.files)) {
+            switchToTimelineRef.current(0, null);
+          }
           if (payload.exportContext) {
             setPendingExportContext(payload.exportContext);
           }
