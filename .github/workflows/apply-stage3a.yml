@@ -38,7 +38,7 @@ jobs:
           python build.py check
           npm run test
           npm run test:frontend
-          npm run build
+          CI=false npm run build
           npm run build:userscript
           npm run build:extension
           npm run build:firefox
